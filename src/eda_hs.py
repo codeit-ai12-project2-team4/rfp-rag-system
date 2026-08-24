@@ -135,3 +135,5 @@ if __name__ == "__main__":
         print(f"\n□ 기호 포함 파일 비율: {df_result['□포함여부'].mean() * 100:.1f}%")
     else:
         print("모든 파일에서 텍스트 추출이 실패했습니다. 위 오류 내용을 확인하세요.")
+
+print("hello")
