@@ -211,3 +211,8 @@ chroma_db/
 # ── OS ──
 .DS_Store
 Thumbs.db
+
+# CJY 개인 설정(uv 관련)
+src/rfp_rag_system
+.python-version
+pyproject.toml
