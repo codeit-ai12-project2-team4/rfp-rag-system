@@ -1,60 +1,46 @@
+"""모델별 설정만 모아두는 곳.
+
+이 파일에 새 모델을 추가/변경하는 것만으로 generation.py 등 실행 코드는
+전혀 건드릴 필요가 없어야 합니다 — 그게 이 파일을 따로 뺀 이유!!.
+
+프로젝트 가이드 상 시나리오 A와 시나리오 B를
+둘 다 구현해서 비교해야 하므로, provider 필드로 두 시나리오를 구분 합니다.
+실행 코드는 provider만 보고 분기하고, 시나리오별로 파일을 따로 만들지 않습니다.
 """
-모델 관련 설정 파일
 
-이 파일에서 값만 바꾸면 src/generation.py의 실행 함수가
-자동으로 해당 모델/옵션을 사용하게 됩니다.
-팀원들은 코드를 건드릴 필요 없이 이 파일만 수정하면 됩니다.
-"""
-
-# ============================================
-# 1. 사용할 모델 선택
-#    "mini" 또는 "nano" 중 하나로 설정
-# ============================================
-ACTIVE_MODEL = "nano"  # <-- 여기만 바꾸면 됩니다: "mini" | "nano"
+from dataclasses import dataclass
 
 
-# ============================================
-# 2. 별칭(alias) -> 실제 API 모델명 매핑
-#    새 모델이 추가되면 여기에만 추가하면 됩니다.
-# ============================================
-MODEL_MAP = {
-    "mini": "gpt-5-mini",
-    "nano": "gpt-5-nano",
+@dataclass
+class ModelConfig:
+    """모델 하나에 대한 실행 설정.
+
+    Attributes:
+        provider: "openai"(시나리오 B) 또는 "huggingface"(시나리오 A).
+        model: 실제 모델 식별자. 예: "gpt-5-mini", "meta-llama/Meta-Llama-3-8B-Instruct".
+        reasoning_effort: openai 전용 옵션. minimal | low | medium | high.
+            사고 시간/품질 트레이드오프를 조절한다.
+        verbosity: openai 전용 옵션. low | medium | high. 응답 길이/상세도를 조절한다.
+    """
+
+    provider: str
+    model: str
+    reasoning_effort: str = "medium"
+    verbosity: str = "medium"
+
+
+# 실제로 사용하는 모델 키는 여기 딕셔너리 키("mini", "nano" 등)로 통일!!
+# 코드/로그/평가 결과 어디서든 같은 이름을 쓰기 (에러 방지).
+MODEL_CONFIGS: dict[str, ModelConfig] = {
+    # --- 시나리오 B ---
+    "mini": ModelConfig(
+        provider="openai",
+        model="gpt-5-mini",
+        reasoning_effort="medium",
+        verbosity="medium",
+    ),
+    "nano": ModelConfig(
+        provider="openai", model="gpt-5-nano", reasoning_effort="low", verbosity="low"
+    ),
+    # --- 시나리오 A: (나중에 추가 예정, 자리만 미리 잡아뒀어여) ---
 }
-
-
-# ============================================
-# 3. 모델별 기본 생성 옵션
-#    필요하면 모델마다 다르게 설정 가능
-#    (예: nano는 분류/추출용이라 짧고 정확하게,
-#         mini는 최종 답변용이라 조금 더 여유 있게)
-# ============================================
-GENERATION_PARAMS = {
-    "mini": {
-        "temperature": 0.2,
-        "max_tokens": 800,
-    },
-    "nano": {
-        "temperature": 0.0,
-        "max_tokens": 200,
-    },
-}
-
-
-# ============================================
-# 4. 최종적으로 실행 함수가 참조할 값
-#    (이 아래는 수정할 필요 없음)
-# ============================================
-def get_active_model_name() -> str:
-    """ACTIVE_MODEL 별칭을 실제 API 모델명으로 변환해서 반환"""
-    if ACTIVE_MODEL not in MODEL_MAP:
-        raise ValueError(
-            f"알 수 없는 모델 별칭입니다: '{ACTIVE_MODEL}'. "
-            f"MODEL_MAP에 정의된 값 중 하나를 사용하세요: {list(MODEL_MAP.keys())}"
-        )
-    return MODEL_MAP[ACTIVE_MODEL]
-
-
-def get_active_params() -> dict:
-    """ACTIVE_MODEL에 해당하는 생성 옵션(temperature, max_tokens 등)을 반환"""
-    return GENERATION_PARAMS.get(ACTIVE_MODEL, {"temperature": 0.2, "max_tokens": 500})
