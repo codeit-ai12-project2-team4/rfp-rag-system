@@ -75,10 +75,12 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+test*.ipynb
 
 # IPython
 profile_default/
 ipython_config.py
+test*.py
 
 # pyenv
 # .python-version
@@ -132,6 +134,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.env
+.env.*
+!.env.example
 
 # Spyder project settings
 .spyderproject
