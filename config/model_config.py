@@ -1,38 +1,44 @@
-"""모델별 설정만 모아두는 곳.
+"""모델별 설정값을 정의하는 모듈.
 
-이 파일에 새 모델을 추가/변경하는 것만으로 generation.py 등 실행 코드는
-전혀 건드릴 필요가 없어야 합니다 — 그게 이 파일을 따로 뺀 이유!!.
-
-프로젝트 가이드 상 시나리오 A와 시나리오 B를
-둘 다 구현해서 비교해야 하므로, provider 필드로 두 시나리오를 구분 합니다.
-실행 코드는 provider만 보고 분기하고, 시나리오별로 파일을 따로 만들지 않습니다.
+새 모델을 추가할 때는 이 파일의 MODEL_CONFIGS에 항목을 추가하기만 하면 되고,
+실행 코드(src/generation.py)는 건드릴 필요가 없습니다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class ModelConfig:
-    """모델 하나에 대한 실행 설정.
+    """모델 하나에 대한 설정.
 
     Attributes:
-        provider: "openai"(시나리오 B) 또는 "huggingface"(시나리오 A).
-        model: 실제 모델 식별자. 예: "gpt-5-mini", "meta-llama/Meta-Llama-3-8B-Instruct".
-        reasoning_effort: openai 전용 옵션. minimal | low | medium | high.
-            사고 시간/품질 트레이드오프를 조절한다.
-        verbosity: openai 전용 옵션. low | medium | high. 응답 길이/상세도를 조절한다.
+        provider: "openai" 또는 "huggingface". generate_answer()가 이 값으로
+            어떤 실행 함수를 쓸지 분기한다.
+        model: 실제 호출할 모델명 (예: "gpt-5-mini", 또는 HuggingFace repo id).
+        reasoning_effort: OpenAI 모델용. "minimal" | "low" | "medium" | "high".
+            provider가 "huggingface"이면 사용되지 않는다.
+        verbosity: OpenAI 모델용. "low" | "medium" | "high".
+            provider가 "huggingface"이면 사용되지 않는다.
+        dtype: HuggingFace 모델용. "bfloat16" | "float16" | "float32".
+            provider가 "openai"이면 사용되지 않는다.
+        device_map: HuggingFace 모델용 device_map 값 (예: "auto").
+            provider가 "openai"이면 사용되지 않는다.
+        max_new_tokens: HuggingFace 모델용 생성 토큰 상한.
+            provider가 "openai"이면 사용되지 않는다.
+        extra: HuggingFace pipeline() 호출 시 추가로 넘길 키워드 인자.
     """
 
     provider: str
     model: str
-    reasoning_effort: str = "medium"
-    verbosity: str = "medium"
+    reasoning_effort: str | None = None
+    verbosity: str | None = None
+    dtype: str | None = None
+    device_map: str | None = None
+    max_new_tokens: int | None = None
+    extra: dict = field(default_factory=dict)
 
 
-# 실제로 사용하는 모델 키는 여기 딕셔너리 키("mini", "nano" 등)로 통일!!
-# 코드/로그/평가 결과 어디서든 같은 이름을 쓰기 (에러 방지).
-MODEL_CONFIGS: dict[str, ModelConfig] = {
-    # --- 시나리오 B ---
+MODEL_CONFIGS = {
     "mini": ModelConfig(
         provider="openai",
         model="gpt-5-mini",
@@ -40,7 +46,18 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
         verbosity="medium",
     ),
     "nano": ModelConfig(
-        provider="openai", model="gpt-5-nano", reasoning_effort="low", verbosity="low"
+        provider="openai",
+        model="gpt-5-nano",
+        reasoning_effort="low",
+        verbosity="low",
     ),
-    # --- 시나리오 A: (나중에 추가 예정, 자리만 미리 잡아뒀어여) ---
+    # 시나리오 A 모델을 정하면 아래처럼 주석을 풀고 채우면 됩니댱.
+    # 예시:
+    # "llama-gcp": ModelConfig(
+    #     provider="huggingface",
+    #     model=" ",
+    #     dtype="bfloat16",
+    #     device_map="auto",
+    #     max_new_tokens=512,
+    # ),
 }
