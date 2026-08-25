@@ -216,3 +216,10 @@ Thumbs.db
 src/rfp_rag_system
 .python-version
 pyproject.toml
+data/
+notebooks/
+scripts/
+uv.*
+test/
+docker/
+evalsets/

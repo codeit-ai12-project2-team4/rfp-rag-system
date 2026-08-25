@@ -6,8 +6,8 @@
 import os
 from pathlib import Path
 
-# 이 파일이 src/bidmate/paths.py 이므로 두 단계 위가 프로젝트 폴더
-ROOT = Path(__file__).resolve().parents[2]
+# 이 파일이 src/paths.py 이므로 두 단계 위가 프로젝트 폴더
+ROOT = Path(__file__).resolve().parents[1]
 
 DATA = ROOT / "data"
 RAW = DATA / "files"  # 원본 hwp / pdf

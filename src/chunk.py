@@ -19,7 +19,7 @@ import re
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from bidmate import paths
+import paths
 
 # RFP 목차 헤딩 패턴. 위에 있는 것부터 검사한다.
 #   Ⅰ. 사업 안내 / 제1장 총칙 / 1. 사업개요 / □ 사 업 명
@@ -154,9 +154,9 @@ def split_by_section(records, size=1000, overlap=150, add_header=False, recursiv
             if len(body) < 30:
                 continue
 
-            pieces = (splitter.split_text(body)
-                      if recursive and len(body) > size
-                      else [body])
+            pieces = (
+                splitter.split_text(body) if recursive and len(body) > size else [body]
+            )
             for piece in pieces:
                 chunks.append(_make_chunk(piece, meta, order, section, add_header))
                 order += 1
@@ -166,8 +166,9 @@ def split_by_section(records, size=1000, overlap=150, add_header=False, recursiv
 # --- 방법 3. 의미로 자르기 -------------------------------------------------
 
 
-def split_semantic(records, embedder, threshold_type="percentile", threshold=95,
-                   add_header=False):
+def split_semantic(
+    records, embedder, threshold_type="percentile", threshold=95, add_header=False
+):
     """임베딩으로 주제가 바뀌는 지점을 찾아 자른다. 강의 L05 의 SemanticChunker.
 
     문장마다 임베딩을 만들어 이웃과 비교하고, 확 달라지는 곳에서 끊는다.
@@ -227,10 +228,12 @@ def with_header(chunks, include_section=True):
         title = chunk.metadata.get("title", "")
         section = chunk.metadata.get("section", "") if include_section else ""
         head = f"[{title}]" + (f" [{section}]" if section else "")
-        out.append(Document(
-            page_content=head + "\n" + chunk.page_content,
-            metadata=dict(chunk.metadata),
-        ))
+        out.append(
+            Document(
+                page_content=head + "\n" + chunk.page_content,
+                metadata=dict(chunk.metadata),
+            )
+        )
     return out
 
 
@@ -242,11 +245,14 @@ def save_chunks(chunks, name):
     paths.make_dirs()
     path = paths.PROCESSED / f"chunks_{name}.jsonl"
     with open(path, "w", encoding="utf-8") as f:
-        for chunk in chunks:
-            f.write(json.dumps(
+        f.writelines(
+            json.dumps(
                 {"text": chunk.page_content, "meta": chunk.metadata},
                 ensure_ascii=False,
-            ) + "\n")
+            )
+            + "\n"
+            for chunk in chunks
+        )
     return path
 
 

@@ -17,7 +17,7 @@ import shutil
 
 from langchain_community.vectorstores import FAISS
 
-from bidmate import paths
+import paths
 
 
 def index_path(name):
@@ -37,8 +37,9 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         if path.exists() and not force:
             if verbose:
                 print(f"저장된 인덱스를 불러옵니다: {path}")
-            return FAISS.load_local(str(path), embedder,
-                                    allow_dangerous_deserialization=True)
+            return FAISS.load_local(
+                str(path), embedder, allow_dangerous_deserialization=True
+            )
 
     if verbose:
         total = sum(len(c.page_content) for c in chunks)

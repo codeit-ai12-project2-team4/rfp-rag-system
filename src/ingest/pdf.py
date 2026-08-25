@@ -32,8 +32,9 @@ def _outside(boxes):
     def keep(obj):
         x = (obj.get("x0", 0) + obj.get("x1", 0)) / 2
         y = (obj.get("top", 0) + obj.get("bottom", 0)) / 2
-        return not any(x0 <= x <= x1 and top <= y <= bottom
-                       for x0, top, x1, bottom in boxes)
+        return not any(
+            x0 <= x <= x1 and top <= y <= bottom for x0, top, x1, bottom in boxes
+        )
 
     return keep
 
@@ -54,7 +55,9 @@ def extract_pdf_text(path: str | Path, with_tables: bool = True) -> str:
             tables = page.find_tables() if with_tables else []
 
             if tables:
-                body = page.filter(_outside([t.bbox for t in tables])).extract_text() or ""
+                body = (
+                    page.filter(_outside([t.bbox for t in tables])).extract_text() or ""
+                )
             else:
                 body = page.extract_text() or ""
 

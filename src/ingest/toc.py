@@ -18,16 +18,16 @@ import re
 # 목차 항목처럼 생긴 줄인가
 _TOC_NUMBER = re.compile(
     r"^\s*(?:"
-    r"[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+\s*[.．]"      # Ⅰ.  IV.
-    r"|제?\s*\d+\s*[장절]"                # 제1장
-    r"|\d{1,2}\s*[.．]"                   # 1.  12.
-    r"|[가-하]\s*[.．]"                   # 가.  나.
-    r"|\[?\s*별\s*첨\s*\]?"               # [별첨]
+    r"[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+\s*[.．]"  # Ⅰ.  IV.
+    r"|제?\s*\d+\s*[장절]"  # 제1장
+    r"|\d{1,2}\s*[.．]"  # 1.  12.
+    r"|[가-하]\s*[.．]"  # 가.  나.
+    r"|\[?\s*별\s*첨\s*\]?"  # [별첨]
     r")\s*\S"
 )
 # '목 차', '차 례', 'CONTENTS' 같은 표지 줄
 _TOC_MARK = re.compile(
-    r"^\s*[-–—<\[]*\s*(?:목\s*차|차\s*례|CONTENTS?)\s*[-–—>\]]*\s*$", re.I
+    r"^\s*[-–—<\[]*\s*(?:목\s*차|차\s*례|CONTENTS?)\s*[-–—>\]]*\s*$", re.IGNORECASE
 )
 
 
@@ -40,7 +40,7 @@ def looks_like_toc_line(line):
     line = line.strip()
     if not (2 < len(line) <= 60):
         return False
-    if ":" in line or "：" in line:              # '사업명: …' 은 본문이다
+    if ":" in line or "：" in line:  # '사업명: …' 은 본문이다
         return False
     if line.endswith(("다.", "함", "음", "임", "됨", "다")):
         return False
@@ -80,14 +80,14 @@ def find_toc_lines(text, min_entries=8, window_chars=8000, max_stray=2):
         if not line.strip():
             continue
         if looks_like_toc_line(line):
-            if _key(line) in seen:          # 되풀이 → 여기부터 본문
+            if _key(line) in seen:  # 되풀이 → 여기부터 본문
                 break
             seen.add(_key(line))
             last_hit = i
             stray = 0
         else:
             stray += 1
-            if stray > max_stray:           # 본문 줄이 연달아 나오면 끝
+            if stray > max_stray:  # 본문 줄이 연달아 나오면 끝
                 break
 
     if last_hit is None or len(seen) < min_entries:

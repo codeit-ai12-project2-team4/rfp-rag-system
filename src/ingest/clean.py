@@ -60,7 +60,9 @@ def drop_repeated_lines(text: str, min_repeat: int = 5, max_len: int = 60) -> st
     noisy = {
         ln
         for ln, c in counts.items()
-        if c >= min_repeat and len(ln) <= max_len and not ln.endswith(("다.", "함", "음"))
+        if c >= min_repeat
+        and len(ln) <= max_len
+        and not ln.endswith(("다.", "함", "음"))
     }
     return "\n".join(ln for ln in lines if ln.strip() not in noisy)
 

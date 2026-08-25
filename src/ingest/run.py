@@ -24,8 +24,8 @@ import hashlib
 import json
 
 import pandas as pd
-from bidmate import paths
 
+import paths
 from ingest.clean import clean_text
 from ingest.hwp import extract_hwp_preview_text, extract_hwp_text
 from ingest.hwp_table import extract_hwp_tables
