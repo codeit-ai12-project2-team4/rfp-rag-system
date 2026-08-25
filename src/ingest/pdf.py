@@ -17,6 +17,10 @@ import pdfplumber
 SCANNED_CHAR_THRESHOLD = 40
 
 
+class PdfParseError(RuntimeError):
+    pass
+
+
 def _table_to_text(table: list[list[str | None]]) -> str:
     rows = []
     for row in table:

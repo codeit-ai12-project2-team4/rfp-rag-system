@@ -27,9 +27,9 @@ import pandas as pd
 
 import paths
 from ingest.clean import clean_text
-from ingest.hwp import extract_hwp_preview_text, extract_hwp_text
+from ingest.hwp import HwpParseError, extract_hwp_preview_text, extract_hwp_text
 from ingest.hwp_table import extract_hwp_tables
-from ingest.pdf import extract_pdf_text, looks_scanned
+from ingest.pdf import PdfParseError, extract_pdf_text, looks_scanned
 from ingest.toc import drop_toc
 
 # CSV 컬럼 이름을 코드에서 쓸 이름으로
@@ -88,11 +88,11 @@ def extract_one(path, file_type):
             if USE_TABLE_PARSER:
                 return extract_hwp_tables(path), "hwp5-table", warnings
             return extract_hwp_text(path), "hwp5-ole", warnings
-        except Exception as error:
+        except HwpParseError as error:
             warnings.append(f"hwp 본문 파싱 실패: {error}")
             try:
                 return extract_hwp_preview_text(path), "prvtext-fallback", warnings
-            except Exception as error2:
+            except HwpParseError as error2:
                 warnings.append(f"미리보기 텍스트도 실패: {error2}")
                 return "", "failed", warnings
 
@@ -101,7 +101,7 @@ def extract_one(path, file_type):
             if looks_scanned(path):
                 warnings.append("스캔 PDF 로 의심됨 — OCR 필요")
             return extract_pdf_text(path), "pdfplumber", warnings
-        except Exception as error:
+        except PdfParseError as error:
             warnings.append(f"pdf 파싱 실패: {error}")
             return "", "failed", warnings
 
