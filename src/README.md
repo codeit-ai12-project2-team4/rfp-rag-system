@@ -69,13 +69,56 @@ from pieces import Pipeline, Dense, BM25, Hybrid, Rerank, Generate
 
 `from src.preprocessing import ...` 는 안 된다. 패키지 내부가 평평한 import 를 쓴다.
 
-## 실행
+## 실행 — 산출물을 만드는 건 src 안의 파일이다
+
+각 단계가 자기 산출물을 직접 만든다. `scripts/` 는 실험·점검용이지 파이프라인이
+아니다.
 
 ```bash
-python scripts/extract.py        # 원본 → data/processed/documents.jsonl
-python scripts/build_index.py    # 청킹 + 임베딩 → outputs/
-python scripts/check_setup.py    # import · 데이터 · 서버 점검
-python scripts/eval_tables.py    # 표 추출 점검 (--dump 로 눈으로 대조)
+python src/preprocessing/run.py                     → data/processed/documents.jsonl
+python src/chunking.py                              → outputs/chunks/chunks_*.jsonl
+python src/vectorstore.py --chunks <청크이름>        → outputs/vectorstore/<이름>/
+```
+
+이름이 이어진다. `chunking.py` 가 다음에 칠 명령을 찍어 주므로 그대로 붙이면 된다.
+
+```
+python src/chunking.py --docs cleaned_documents --how recursive --size 1500
+  → outputs/chunks/chunks_cleaned_documents__recursive_1500_200.jsonl
+  → 다음:  python src/vectorstore.py --chunks cleaned_documents__recursive_1500_200
+  → outputs/vectorstore/cleaned_documents__recursive_1500_200__tei/
+```
+
+**전처리본 · 자르기 설정 · 임베딩이 이름 하나에 다 남는다.** A/B 를 여러 벌
+돌려도 어느 조합인지 파일 이름만 보면 안다.
+
+### scripts/ — 실험과 점검
+
+```bash
+python scripts/check_setup.py       import · 데이터 · 서버 점검
+python scripts/eval_tables.py       표 추출 점검 (--dump 로 눈으로 대조)
+python scripts/compare_chunking.py  청킹 설정 A/B (--docs 로 전처리본까지)
 ```
 
 서버는 `docker/` 에서 띄운다 (TEI 임베딩 8085 · 리랭커 8086).
+
+## 주석은 구글 스타일
+
+```python
+def load_store(name, embedder):
+    """저장해 둔 인덱스를 불러온다.
+
+    Args:
+        name: `build_store` 에 준 것과 같은 이름.
+        embedder: 만들 때와 **같은** 임베딩 객체.
+
+    Returns:
+        FAISS 인덱스.
+
+    Raises:
+        FileNotFoundError: 그 이름으로 저장된 인덱스가 없을 때.
+    """
+```
+
+`chunking.py`, `vectorstore.py`, `preprocessing/run.py` 의 `main()` 은 옮겼다.
+나머지 파일은 아직 서술형이다.

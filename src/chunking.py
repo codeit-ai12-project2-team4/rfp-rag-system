@@ -1,25 +1,36 @@
-"""문서를 청크로 자르기.
+"""문서를 청크로 자르고 저장한다.
 
 자르는 방법이 검색 성능을 크게 좌우한다. 정답이 두 조각으로 흩어지면
-어떤 검색기도 못 붙인다.
-
-세 가지를 넣어 뒀다. 노트북 2번에서 눈으로 비교하고 고른다.
+어떤 검색기도 못 붙인다. 세 가지를 넣어 뒀다.
 
     split_recursive   글자 수로 자르되 문단·문장 경계를 지킨다 (강의 기본)
     split_by_section  RFP 목차 구조(Ⅰ. / 1. / □)를 경계로 자른다
     split_semantic    임베딩으로 주제가 바뀌는 지점을 찾아 자른다 (느리다)
 
 전부 langchain Document 리스트를 받아 Document 리스트를 돌려준다.
-`chunk.page_content` 와 `chunk.metadata` 로 접근하는 건 강의와 같다.
+
+명령줄로 돌리면 `outputs/chunks/` 에 청크 파일이 떨어진다.
+
+    python src/chunking.py
+    python src/chunking.py --docs cleaned_documents --how recursive --size 1500
 """
 
+import argparse
 import json
 import re
+import sys
+from pathlib import Path
 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+# `python src/chunking.py` 로 직접 돌릴 때 config 를 찾게 한다.
+# import 로 쓸 때는 이미 경로에 있어서 아무 일도 안 한다.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-from _config import settings
+from langchain_core.documents import Document  # noqa: E402
+from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E402
+
+from config import settings  # noqa: E402
 
 # RFP 목차 헤딩 패턴. 위에 있는 것부터 검사한다.
 #   Ⅰ. 사업 안내 / 제1장 총칙 / 1. 사업개요 / □ 사 업 명
@@ -32,10 +43,17 @@ HEADING_PATTERNS = [
 
 
 def find_headings(text, max_level=2):
-    """(글자 위치, 단계, 제목) 목록을 돌려준다.
+    """본문에서 목차 헤딩을 찾는다.
 
-    새 문서 서식에서 헤딩이 잘 안 잡히면 HEADING_PATTERNS 에 줄을 추가한다.
+    새 문서 서식에서 헤딩이 잘 안 잡히면 `HEADING_PATTERNS` 에 줄을 추가한다.
     노트북 2번에서 이 함수 출력을 먼저 보는 게 순서다.
+
+    Args:
+        text: 문서 본문.
+        max_level: 이 단계까지만 헤딩으로 본다. 1이면 `Ⅰ.` 만, 2면 `1.` 까지.
+
+    Returns:
+        `(글자 위치, 단계, 제목)` 튜플 리스트. 본문에 나온 순서 그대로다.
     """
     found = []
     offset = 0
@@ -55,9 +73,15 @@ def find_headings(text, max_level=2):
 
 
 def to_documents(records):
-    """documents.jsonl 레코드를 langchain Document 로 바꾼다.
+    """전처리 레코드를 langchain Document 로 바꾼다.
 
     청킹 전에 한 번 거치는 단계다. 이후로는 전부 Document 로 다룬다.
+
+    Args:
+        records: `{"text": ..., "meta": {...}}` 꼴 레코드 리스트.
+
+    Returns:
+        Document 리스트. `metadata` 는 레코드의 `meta` 를 그대로 옮긴다.
     """
     return [
         Document(page_content=record["text"], metadata={**record["meta"]})
@@ -86,10 +110,20 @@ def _make_chunk(text, source_meta, order, section=None, add_header=False):
 
 
 def split_recursive(records, size=1000, overlap=150, add_header=False):
-    """글자 수로 자르되 문단(\\n\\n) → 줄(\\n) → 문장 순으로 경계를 지킨다.
+    """글자 수로 자른다. 문단 → 줄 → 문장 순으로 경계를 지킨다.
 
-    강의에서 쓴 RecursiveCharacterTextSplitter 와 같다. 강의는 150자였는데
+    강의에서 쓴 `RecursiveCharacterTextSplitter` 와 같다. 강의는 150자였는데
     RFP 는 문서가 훨씬 길어서 1000자 정도가 출발점으로 낫다. 정답은 실험으로.
+
+    Args:
+        records: 전처리 레코드 리스트.
+        size: 청크 최대 글자 수.
+        overlap: 이웃 청크끼리 겹치는 글자 수.
+        add_header: True 면 청크 앞에 `[사업명]` 을 붙인다. BM25 에는 해로우니
+            기본값 False 를 권한다. 아래 `with_header` 주석 참고.
+
+    Returns:
+        Document 리스트.
     """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=size,
@@ -174,6 +208,16 @@ def split_semantic(
     문장마다 임베딩을 만들어 이웃과 비교하고, 확 달라지는 곳에서 끊는다.
     **문서 하나당 문장 수만큼 임베딩을 만들어야 해서 느리고 비용도 든다.**
     100건 전체에 돌리기 전에 5건으로 시간을 재 볼 것.
+
+    Args:
+        records: 전처리 레코드 리스트.
+        embedder: `embed_documents` 를 가진 임베딩 객체.
+        threshold_type: 끊는 기준. `percentile` / `standard_deviation` 등.
+        threshold: 기준값. percentile 이면 95 는 상위 5% 지점에서 끊는다는 뜻.
+        add_header: 청크 앞에 `[사업명]` 을 붙일지.
+
+    Returns:
+        Document 리스트.
     """
     from langchain_experimental.text_splitter import SemanticChunker
 
@@ -222,7 +266,17 @@ def split_semantic(
 
 
 def with_header(chunks, include_section=True):
-    """청크 앞에 [사업명] [절 제목] 을 붙인 새 리스트를 만든다. 원본은 안 건드린다."""
+    """청크 앞에 `[사업명] [절 제목]` 을 붙인 새 리스트를 만든다.
+
+    원본 리스트와 Document 는 건드리지 않는다.
+
+    Args:
+        chunks: 원본 청크 리스트.
+        include_section: True 면 절 제목까지 붙인다.
+
+    Returns:
+        머리말이 붙은 새 Document 리스트.
+    """
     out = []
     for chunk in chunks:
         title = chunk.metadata.get("title", "")
@@ -241,7 +295,15 @@ def with_header(chunks, include_section=True):
 
 
 def save_chunks(chunks, name):
-    """청크를 파일로. 같은 설정을 다시 자르지 않게."""
+    """청크를 jsonl 로 저장한다. 같은 설정을 다시 자르지 않게.
+
+    Args:
+        chunks: 저장할 Document 리스트.
+        name: 설정 이름. 파일은 `outputs/chunks/chunks_{name}.jsonl` 이 된다.
+
+    Returns:
+        저장한 파일 경로.
+    """
     settings.make_dirs()
     path = settings.CHUNKS / f"chunks_{name}.jsonl"
     with open(path, "w", encoding="utf-8") as f:
@@ -257,6 +319,17 @@ def save_chunks(chunks, name):
 
 
 def load_chunks(name):
+    """저장해 둔 청크를 읽는다.
+
+    Args:
+        name: `save_chunks` 에 준 것과 같은 이름.
+
+    Returns:
+        Document 리스트.
+
+    Raises:
+        FileNotFoundError: 그 이름으로 저장된 청크가 없을 때.
+    """
     path = settings.CHUNKS / f"chunks_{name}.jsonl"
     with open(path, encoding="utf-8") as f:
         return [
@@ -266,7 +339,15 @@ def load_chunks(name):
 
 
 def chunk_stats(chunks):
-    """청크 길이 분포. 표로 비교할 때 쓴다."""
+    """청크 길이 분포를 잰다. 설정끼리 표로 비교할 때 쓴다.
+
+    Args:
+        chunks: Document 리스트.
+
+    Returns:
+        청크수·평균·중앙·최소·최대·50자미만·총글자 를 담은 dict.
+        빈 리스트를 주면 빈 dict.
+    """
     lengths = [len(c.page_content) for c in chunks]
     if not lengths:
         return {}
@@ -280,3 +361,54 @@ def chunk_stats(chunks):
         "50자미만": sum(1 for x in lengths if x < 50),
         "총글자": sum(lengths),
     }
+
+
+# --- 명령줄로 돌리기 -------------------------------------------------------
+
+
+def main():
+    """명령줄에서 청크 파일을 만든다.
+
+    `outputs/chunks/chunks_{이름}.jsonl` 을 만들고 길이 분포를 찍는다.
+    이름에 전처리본과 자르기 설정이 다 들어가므로, 어떤 설정으로 만든
+    청크인지 파일 이름만 봐도 알 수 있다.
+    """
+    parser = argparse.ArgumentParser(
+        description="문서를 잘라 outputs/chunks 에 저장한다."
+    )
+    parser.add_argument("--docs", default="documents",
+                        help="data/processed 안의 jsonl 이름 (확장자 없이)")
+    parser.add_argument("--how", default="section", choices=["section", "recursive"])
+    parser.add_argument("--size", type=int, default=1000)
+    parser.add_argument("--overlap", type=int, default=150)
+    parser.add_argument("--header", action="store_true",
+                        help="청크 앞에 [사업명] 을 붙인다. 임베딩용이고 BM25 에는 해롭다")
+    parser.add_argument("--name", help="저장 이름 (생략하면 설정에서 자동으로 만든다)")
+    args = parser.parse_args()
+
+    from preprocessing import load_documents  # 명령줄로 쓸 때만 필요하다
+
+    documents = load_documents(args.docs)
+    print(f"문서 {len(documents)}건 ({args.docs})")
+
+    split = split_by_section if args.how == "section" else split_recursive
+    chunks = split(documents, size=args.size, overlap=args.overlap)
+    if args.header:
+        chunks = with_header(chunks)
+
+    name = args.name or "__".join(filter(None, [
+        args.docs, f"{args.how}_{args.size}_{args.overlap}",
+        "header" if args.header else "",
+    ]))
+    path = save_chunks(chunks, name)
+
+    stats = chunk_stats(chunks)
+    width = max(len(k) for k in stats)
+    for key, value in stats.items():
+        print(f"  {key:<{width}}  {value:>10,}")
+    print(f"\n청크 저장 → {path}")
+    print(f"다음:  python src/vectorstore.py --chunks {name}")
+
+
+if __name__ == "__main__":
+    main()

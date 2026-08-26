@@ -25,7 +25,7 @@ def setup(check=True):
         if str(folder) not in sys.path:
             sys.path.insert(0, str(folder))
 
-    from _config import settings
+    from config import settings
 
     settings.make_dirs()
     if check:

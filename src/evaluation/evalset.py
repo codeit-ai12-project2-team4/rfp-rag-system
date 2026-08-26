@@ -8,7 +8,7 @@
 import json
 import re
 
-from _config import settings
+from config import settings
 
 
 def normalize(text):
