@@ -10,7 +10,7 @@
 
 import re
 
-from evaluate.evalset import matches
+from evaluation.evalset import matches
 
 
 def cite_rate(answer):

@@ -13,7 +13,9 @@ import os
 from resources import free_disk_gb
 
 VLLM_URL = os.environ.get("VLLM_URL", "http://localhost:8087/v1")
-LOCAL_LLM_MODEL = os.environ.get("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+LOCAL_LLM_MODEL = os.environ.get(
+    "LOCAL_LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507"
+)  # "Qwen/Qwen2.5-7B-Instruct")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 
@@ -68,11 +70,15 @@ class HFLLM:
             print(f"내려받기 시작: {model_name} (약 {need}GB, 남은 공간 {free:.1f}GB)")
 
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+        bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+
+        if torch.mps.is_available():
+            device = "mps"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype or torch.float16
+            model_name, dtype=dtype or torch.float16, quantization_config=bnb_config
         ).to(device)
         self.device = device
         print(f"모델 올림: {model_name} ({device})")

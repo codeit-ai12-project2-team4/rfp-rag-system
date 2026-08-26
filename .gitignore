@@ -223,3 +223,9 @@ uv.*
 test/
 docker/
 evalsets/
+
+# ── 팀 구조 정리 (2026-08-26) ──
+outputs/
+data/raw/
+data/processed/
+data/metadata/

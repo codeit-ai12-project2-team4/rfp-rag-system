@@ -17,11 +17,11 @@ import shutil
 
 from langchain_community.vectorstores import FAISS
 
-import paths
+from _config import settings
 
 
 def index_path(name):
-    return paths.INDEX / name
+    return settings.VECTORSTORE / name
 
 
 def build_store(chunks, embedder, name=None, force=False, verbose=True):
@@ -32,7 +32,7 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
     force=True 면 저장된 게 있어도 다시 만든다.
     """
     if name:
-        paths.make_dirs()
+        settings.make_dirs()
         path = index_path(name)
         if path.exists() and not force:
             if verbose:
@@ -60,7 +60,7 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
 def load_store(name, embedder):
     path = index_path(name)
     if not path.exists():
-        available = [p.name for p in paths.INDEX.glob("*") if p.is_dir()]
+        available = [p.name for p in settings.VECTORSTORE.glob("*") if p.is_dir()]
         raise FileNotFoundError(
             f"인덱스가 없습니다: {path}\n"
             f"저장된 인덱스: {available or '(없음)'}\n"
@@ -71,9 +71,9 @@ def load_store(name, embedder):
 
 def list_stores():
     """만들어 둔 인덱스 목록."""
-    if not paths.INDEX.exists():
+    if not settings.VECTORSTORE.exists():
         return []
-    return sorted(p.name for p in paths.INDEX.glob("*") if p.is_dir())
+    return sorted(p.name for p in settings.VECTORSTORE.glob("*") if p.is_dir())
 
 
 def add_chunks(store, chunks, name=None):

@@ -1,4 +1,4 @@
-"""원본 파일 100건 → data/interim/documents.jsonl
+"""원본 파일 100건 → data/processed/documents.jsonl
 
 ## 왜 CSV 의 `텍스트` 컬럼을 안 쓰나
 
@@ -25,12 +25,12 @@ import json
 
 import pandas as pd
 
-import paths
-from ingest.clean import clean_text
-from ingest.hwp import HwpParseError, extract_hwp_preview_text, extract_hwp_text
-from ingest.hwp_table import extract_hwp_tables
-from ingest.pdf import PdfParseError, extract_pdf_text, looks_scanned
-from ingest.toc import drop_toc
+from _config import settings
+from preprocessing.clean import clean_text
+from preprocessing.hwp import HwpParseError, extract_hwp_preview_text, extract_hwp_text
+from preprocessing.hwp_table import extract_hwp_tables
+from preprocessing.pdf import PdfParseError, extract_pdf_text, looks_scanned
+from preprocessing.toc import drop_toc
 
 # CSV 컬럼 이름을 코드에서 쓸 이름으로
 COLUMNS = {
@@ -71,7 +71,7 @@ def make_doc_id(row):
 
 def load_metadata(csv_path=None):
     """data_list.csv 를 읽어 컬럼 이름을 정리하고 doc_id 를 붙인다."""
-    df = pd.read_csv(csv_path or paths.META_CSV)
+    df = pd.read_csv(csv_path or settings.META_CSV)
     df = df.rename(columns=COLUMNS)
     for column in ("published_at", "bid_open_at", "bid_close_at"):
         df[column] = pd.to_datetime(df[column], errors="coerce")
@@ -113,9 +113,9 @@ def build_documents(
     csv_path=None, raw_dir=None, out_path=None, aggressive_clean=True, verbose=True
 ):
     """원본을 전부 훑어 documents.jsonl 을 만든다. 100건에 몇 분 걸린다."""
-    paths.make_dirs()
-    raw_dir = raw_dir or paths.RAW
-    out_path = out_path or paths.DOCUMENTS_JSONL
+    settings.make_dirs()
+    raw_dir = raw_dir or settings.RAW
+    out_path = out_path or settings.DOCUMENTS_JSONL
 
     df = load_metadata(csv_path)
     documents = []
@@ -186,7 +186,7 @@ def load_documents(path=None, only_real=False):
     only_real=True 면 CSV 로 되돌아간 문서를 뺀다. 추출이 제대로 된 것만
     가지고 실험하고 싶을 때 쓴다.
     """
-    path = path or paths.DOCUMENTS_JSONL
+    path = path or settings.DOCUMENTS_JSONL
     if not path.exists():
         raise FileNotFoundError(
             f"추출 결과가 없습니다: {path}\n먼저 실행하세요:  python scripts/extract.py"

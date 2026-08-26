@@ -13,7 +13,7 @@
     generation.py   생성 지표 — 근거표시율, 물러섬, 충실성
 """
 
-from evaluate.evalset import (
+from evaluation.evalset import (
     FIELD_PATTERNS,
     load_evalset,
     make_pairs_from_documents,
@@ -21,7 +21,7 @@ from evaluate.evalset import (
     normalize,
     save_evalset,
 )
-from evaluate.generation import (
+from evaluation.generation import (
     JUDGE_SYSTEM,
     cite_rate,
     evaluate_answers,
@@ -29,7 +29,7 @@ from evaluate.generation import (
     number_match,
     said_no_info,
 )
-from evaluate.retrieval import (
+from evaluation.retrieval import (
     compare,
     doc_hit_rate,
     hit_rate,

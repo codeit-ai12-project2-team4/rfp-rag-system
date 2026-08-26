@@ -19,7 +19,7 @@ import re
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-import paths
+from _config import settings
 
 # RFP 목차 헤딩 패턴. 위에 있는 것부터 검사한다.
 #   Ⅰ. 사업 안내 / 제1장 총칙 / 1. 사업개요 / □ 사 업 명
@@ -242,8 +242,8 @@ def with_header(chunks, include_section=True):
 
 def save_chunks(chunks, name):
     """청크를 파일로. 같은 설정을 다시 자르지 않게."""
-    paths.make_dirs()
-    path = paths.PROCESSED / f"chunks_{name}.jsonl"
+    settings.make_dirs()
+    path = settings.CHUNKS / f"chunks_{name}.jsonl"
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(
             json.dumps(
@@ -257,7 +257,7 @@ def save_chunks(chunks, name):
 
 
 def load_chunks(name):
-    path = paths.PROCESSED / f"chunks_{name}.jsonl"
+    path = settings.CHUNKS / f"chunks_{name}.jsonl"
     with open(path, encoding="utf-8") as f:
         return [
             Document(page_content=row["text"], metadata=row["meta"])

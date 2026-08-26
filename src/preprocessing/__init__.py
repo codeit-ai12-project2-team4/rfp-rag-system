@@ -1,16 +1,16 @@
 """원본 hwp / pdf → 본문 텍스트."""
 
-from ingest.clean import clean_text
-from ingest.hwp import extract_hwp_text
-from ingest.hwp_table import extract_hwp_tables, extract_with_report
-from ingest.pdf import extract_pdf_text
-from ingest.run import (
+from preprocessing.clean import clean_text
+from preprocessing.hwp import extract_hwp_text
+from preprocessing.hwp_table import extract_hwp_tables, extract_with_report
+from preprocessing.pdf import extract_pdf_text
+from preprocessing.run import (
     build_documents,
     documents_table,
     load_documents,
     load_metadata,
 )
-from ingest.toc import drop_toc
+from preprocessing.toc import drop_toc
 
 __all__ = [
     "build_documents",

@@ -50,7 +50,7 @@ from pathlib import Path
 
 import olefile
 
-from ingest.hwp import HwpParseError, _decode_para_text
+from preprocessing.hwp import HwpParseError, _decode_para_text
 
 TAG_PARA_TEXT = 67
 TAG_CTRL_HEADER = 71
@@ -187,19 +187,32 @@ def render_table(table, caption="표"):
 
     cols = table["cols"]
 
-    # 2열이고 왼쪽이 짧으면 키-값형 (요구사항 상세, 사업 개요)
+    # 1열 표는 레이아웃용 상자다. 열 관계가 없으므로 칸 글자를 그대로 내보낸다.
+    if cols == 1:
+        return "\n".join(dict.fromkeys(c for row in grid for c in row if c))
+
     if cols == 2 and all(len(r[0]) <= 20 for r in grid if r[0]):
         lines = [f"{k}: {v}" for k, v in grid if k or v]
-        return "\n".join(dict.fromkeys(lines))  # 세로 병합으로 생긴 중복 제거
+        return "\n".join(dict.fromkeys(lines))
 
     header, *data = grid
+    # (제목 행 재시도 패치는 삭제한다. 이득보다 손해가 컸다.)
+
     lines = []
+    head_line = " | ".join(dict.fromkeys(h for h in header if h))
+    if head_line:
+        lines.append(f"[{caption}] {head_line}")
+
     for row in data:
         pairs = [f"{h}={v}" for h, v in zip(header, row) if v and h and h != v]
         if pairs:
             lines.append(f"[{caption}] " + " · ".join(pairs))
+
+    # 짝을 하나도 못 만들었으면 격자를 그대로 내보낸다. 글자를 버리지 않는다.
     if not lines:
-        return " | ".join(x for x in header if x)
+        return "\n".join(
+            dict.fromkeys(" | ".join(x for x in row if x) for row in grid if any(row))
+        )
     return "\n".join(dict.fromkeys(lines))
 
 
@@ -229,18 +242,52 @@ def extract_hwp_tables(path, check_hangul=True):
     return text
 
 
-def extract_with_report(path):
-    """(본문, 통계) 를 돌려준다. 표를 얼마나 복원했는지 보고 싶을 때."""
+def extract_with_report(path, collect=None):
+    """(본문, 통계) 를 돌려준다. 표를 얼마나 복원했는지 보고 싶을 때.
+
+    collect 에 리스트를 주면 표마다 격자와 렌더 결과를 담아 준다.
+    눈으로 대조할 때 쓴다 (scripts/eval_tables.py --dump).
+    """
     parts: list[str] = []
     stack: list[dict] = []
-    report = {"tables": 0, "fallback": 0, "cells": 0, "sections": 0}
+    # slots/filled 는 격자를 얼마나 채웠는지 재는 데 쓴다 (scripts/eval_tables.py)
+    report = {
+        "tables": 0,
+        "fallback": 0,
+        "empty": 0,
+        "cells": 0,
+        "sections": 0,
+        "slots": 0,
+        "filled": 0,
+        "blank_cells": 0,
+    }
 
     def close_top():
         done = stack.pop()
-        rendered = render_table(done, caption=_caption_of(parts))
+        caption = _caption_of(parts)
+        report["blank_cells"] += sum(
+            1 for c in done["cells"] if not "\n".join(c["lines"]).strip()
+        )
+        rendered = render_table(done, caption=caption)
+        grid = None
         if done.get("fallback"):
             report["fallback"] += 1
+        else:
+            grid = build_grid(done)
+            if grid:
+                report["slots"] += done["rows"] * done["cols"]
+                report["filled"] += sum(1 for row in grid for cell in row if cell)
+        if collect is not None:
+            collect.append({
+                "caption": caption,
+                "rows": done["rows"],
+                "cols": done["cols"],
+                "cells": len(done["cells"]),
+                "grid": grid,
+                "rendered": rendered,
+            })
         if not rendered:
+            report["empty"] += 1
             return
         if stack and stack[-1]["cells"]:
             stack[-1]["cells"][-1]["lines"].append(rendered)  # 표 안의 표

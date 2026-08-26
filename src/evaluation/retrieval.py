@@ -11,7 +11,7 @@
 공짜니까 청킹 설정이나 검색 방법을 바꿔 가며 마음껏 돌려도 된다.
 """
 
-from evaluate.evalset import matches
+from evaluation.evalset import matches
 
 
 def _search_once(pairs, search, k):

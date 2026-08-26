@@ -8,7 +8,7 @@
 import json
 import re
 
-import paths
+from _config import settings
 
 
 def normalize(text):
@@ -28,17 +28,17 @@ def matches(chunk_text, keywords):
     return any(normalize(keyword) in body for keyword in keywords)
 
 
-def save_evalset(pairs, name="evalset"):
+def save_evalset(pairs, name="eval_qa"):
     """평가 질문을 파일로. 팀원이 같은 세트로 재야 비교가 된다."""
-    paths.make_dirs()
-    path = paths.EVALSETS / f"{name}.json"
+    settings.make_dirs()
+    path = settings.DATA / f"{name}.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(pairs, f, ensure_ascii=False, indent=2)
     return path
 
 
-def load_evalset(name="evalset"):
-    path = paths.EVALSETS / f"{name}.json"
+def load_evalset(name="eval_qa"):
+    path = settings.DATA / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(
             f"평가 세트가 없습니다: {path}\n노트북 4번에서 만들고 저장하세요."
