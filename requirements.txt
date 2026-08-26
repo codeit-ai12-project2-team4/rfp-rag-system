@@ -15,6 +15,7 @@ matplotlib-inline==0.2.2
 nest-asyncio2==1.7.2
 numpy==2.4.6
 olefile==0.47
+openai==3.3.1
 packaging==26.3
 pandas==3.0.5
 parso==0.8.7
@@ -29,6 +30,7 @@ pycparser==3.0
 Pygments==2.21.0
 pyhwp==0.1b15
 python-dateutil==2.9.0.post0
+python-dotenv==1.2.3
 pyzmq==27.2.0
 setuptools==79.0.1
 six==1.17.0
@@ -58,7 +60,6 @@ kiwipiepy>=0.20              # 한국어 형태소 분석 (BM25 정확도에 중
 
 # --- 서버에 붙기 ---
 requests>=2.32               # TEI 호출
-openai>=1.50                 # OpenAI API, vLLM (둘 다 같은 형식)
 
 # --- 노트북 ---
 # jupyter>=1.1
