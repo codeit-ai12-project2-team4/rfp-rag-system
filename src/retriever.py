@@ -20,6 +20,14 @@
     context = build_context(chunks)      # [1] [2] … 번호가 붙는다
     출처 = sources(chunks)                # 번호 → 공고 정보
 
+generation 파트에 넘길 때는 파일로 뽑는다. 그쪽은 TEI 도 인덱스도 필요 없다.
+
+    python src/retriever.py --export
+    → outputs/eval_results/contexts_eval_qa.jsonl
+
+    for row in map(json.loads, open(path, encoding="utf-8")):
+        generate_answer(model_key="mini", query=row["question"], context=row["context"])
+
 공고를 먼저 찾는 화면(1단계)이라면:
 
     from src.retriever import search_notices
@@ -318,12 +326,70 @@ def preview(text, query, width=220):
     return flat[:width]
 
 
+def export_contexts(evalset, out_path, **kwargs):
+    """평가 질문마다 발췌를 뽑아 파일로 저장한다.
+
+    **generation 파트가 검색을 안 돌려도 되게 하려는 것이다.** 브랜치를 가져갈
+    필요도, TEI 를 띄울 필요도 없다. jsonl 한 줄이 `generate_answer()` 한 번에
+    그대로 들어간다.
+
+    Args:
+        evalset: `data/` 의 평가 세트 이름.
+        out_path: 저장 경로.
+        **kwargs: `retrieve()` 인자 (index, embed, rerank, top_k …).
+
+    Returns:
+        저장한 줄 수.
+    """
+    import json
+    import time
+
+    from evaluation import load_evalset
+
+    pairs = load_evalset(evalset)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    started = time.time()
+    with open(out_path, "w", encoding="utf-8") as f:
+        for i, pair in enumerate(pairs, 1):
+            doc_ids = [pair["doc_id"]] if pair.get("doc_id") else None
+            chunks = fit_context(retrieve(pair["question"], doc_ids=doc_ids, **kwargs))
+            context = format_context(chunks)
+            f.write(json.dumps({
+                "qid": f"{pair.get('type', 'q')}-{i:03d}",
+                "question": pair["question"],
+                "type": pair.get("type"),
+                "answerable": pair.get("answerable", True),
+                "doc_ids": doc_ids,
+                "keywords": pair.get("keywords"),   # 검색 정답. 채점 참고용
+                "context": context,
+                "sources": sources(chunks),
+                "chunks": len(chunks),
+                "chars": len(context),
+            }, ensure_ascii=False) + "\n")
+            print(f"  {i}/{len(pairs)}", end="\r")
+
+    print(" " * 30, end="\r")
+    print(f"질문 {len(pairs)}개 · {time.time() - started:.0f}초 → {out_path}")
+    return len(pairs)
+
+
 def main():
     """명령줄에서 검색 결과를 눈으로 확인한다."""
     parser = argparse.ArgumentParser(description="질문을 넣고 무엇이 뽑히는지 본다.")
     parser.add_argument(
-        "query", help="질문 (또는 --notices 와 함께 쓰면 공고 찾기 질의)"
+        "query",
+        nargs="?",
+        help="질문 (--notices 와 함께면 공고 찾기 질의, --export 면 생략)",
     )
+    parser.add_argument(
+        "--export",
+        action="store_true",
+        help="평가 질문 전체의 발췌를 파일로 뽑는다 (generation 전달용)",
+    )
+    parser.add_argument("--evalset", default="eval_qa", help="data/ 의 평가 세트 이름")
+    parser.add_argument("--out", help="--export 저장 경로")
     parser.add_argument(
         "--notices",
         action="store_true",
@@ -344,6 +410,15 @@ def main():
     parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
     parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
     args = parser.parse_args()
+
+    if args.export:
+        out = args.out or settings.EVAL_RESULTS / f"contexts_{args.evalset}.jsonl"
+        export_contexts(args.evalset, out, top_k=args.top_k, index=args.index,
+                        embed=args.embed, rerank=args.rerank)
+        return
+
+    if not args.query:
+        parser.error("질문을 주거나 --export 를 쓰세요.")
 
     if args.notices:
         notices = search_notices(
