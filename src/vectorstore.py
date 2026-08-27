@@ -19,6 +19,7 @@ OpenAI 를 쓰면 돈이 나간다. 그래서 이름을 붙여 저장하고 다�
 import argparse
 import shutil
 import sys
+import warnings
 from pathlib import Path
 
 # `python src/vectorstore.py` 로 직접 돌릴 때 config 를 찾게 한다.
@@ -27,9 +28,14 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from langchain_community.vectorstores import FAISS  # noqa: E402
+# langchain-community 가 sunset 경고를 띄운다. FAISS 자체는 멀쩡하고,
+# 대안이라던 langchain-faiss(PyPI)는 빈 껍데기라 드롭인 교체가 없다.
+# 청크 9천 개면 FAISS 메모리로 충분하다 — 수십만 개가 되면 그때 옮긴다.
+warnings.filterwarnings("ignore", message=".*langchain-community.*")
 
-from config import settings  # noqa: E402
+from langchain_community.vectorstores.faiss import FAISS
+
+from config import settings
 
 
 def index_path(name):
@@ -178,13 +184,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="청크를 임베딩해 outputs/vectorstore 에 저장한다."
     )
-    parser.add_argument("--chunks", required=True,
-                        help="outputs/chunks 의 청크 이름 (python src/chunking.py 가 찍어 준다)")
+    parser.add_argument(
+        "--chunks",
+        required=True,
+        help="outputs/chunks 의 청크 이름 (python src/chunking.py 가 찍어 준다)",
+    )
     parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
     parser.add_argument("--name", help="인덱스 이름 (생략하면 청크이름__임베딩)")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 만든다")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="만들지 않고 개수와 예상 비용만 본다")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="만들지 않고 개수와 예상 비용만 본다"
+    )
     args = parser.parse_args()
 
     import chunking  # 명령줄로 쓸 때만 필요하다
@@ -192,8 +202,10 @@ def main():
 
     chunks = chunking.load_chunks(args.chunks)
     cost = estimate_cost(chunks)
-    print(f"청크 {len(chunks):,}개 · {cost['글자수']:,}자 "
-          f"· OpenAI 로 하면 약 ${cost['예상비용(달러)']}")
+    print(
+        f"청크 {len(chunks):,}개 · {cost['글자수']:,}자 "
+        f"· OpenAI 로 하면 약 ${cost['예상비용(달러)']}"
+    )
 
     if args.dry_run:
         print("--dry-run 이므로 여기서 멈춥니다.")
