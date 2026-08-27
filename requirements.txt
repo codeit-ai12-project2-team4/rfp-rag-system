@@ -61,6 +61,12 @@ kiwipiepy>=0.20              # 한국어 형태소 분석 (BM25 정확도에 중
 # --- 서버에 붙기 ---
 requests>=2.32               # TEI 호출
 
+# --- 생성 (시나리오 A, HuggingFace 로컬 모델) ---
+torch>=2.4                   # HuggingFace 모델 구동
+transformers>=4.45           # pipeline("text-generation")
+accelerate>=0.34             # device_map="auto"
+bitsandbytes>=0.43           # 8bit/4bit 양자화 (선택이지만 있으면 VRAM 절약)
+
 # --- 노트북 ---
 # jupyter>=1.1
 # ipykernel>=6.29
