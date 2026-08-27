@@ -7,6 +7,7 @@ API 키는 절대 코드에 하드코딩 하지 말아주세요..
 
 import os
 import warnings
+from enum import StrEnum
 from pathlib import Path
 
 # 이 파일이 config/settings.py 이므로 두 단계 위가 프로젝트 폴더
@@ -26,7 +27,7 @@ def load_env():
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-load_env()   # 키를 읽기 전에 .env 부터 올린다
+load_env()  # 키를 읽기 전에 .env 부터 올린다
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
@@ -59,6 +60,55 @@ REPORTS = OUTPUTS / "reports"  # 전처리 경고/이슈 로그
 EVAL_RESULTS = OUTPUTS / "eval_results"  # 평가 지표 결과
 
 PREPROCESSING_REPORT = REPORTS / "preprocessing_report.json"
+
+
+class Provider(StrEnum):
+    """모델을 어디서 부르는지. `ModelConfig.provider` 와 같은 축이다.
+
+    `StrEnum` 이라 문자열과 그대로 비교된다. 그래서 `generation.py` 의
+    `_PROVIDER_RUNNERS.get(cfg.provider)` 같은 기존 코드를 한 줄도 안 고쳐도 된다.
+
+        Provider.OPENAI == "openai"        # True
+        Provider("  OpenAI ")              # Provider.OPENAI  (대소문자·공백 관용)
+
+    **여기 없는 건 안 쓴다.** vLLM 은 OpenAI 규격과 호환이라 `OPENAI` 에
+    `base_url` 만 바꿔 붙인다 (`models/llm.py` 의 `OpenAILLM` 이 그렇게 한다).
+    Anthropic·Google·Groq 등은 키도 계획도 없다 — 필요해지면 한 줄 늘린다.
+
+    Attributes:
+        OPENAI: OpenAI API. gpt-5-mini / gpt-5-nano. 팀 한도 $20.
+        HF: transformers 로 VM 안에 직접 올린다 (시나리오 A).
+    """
+
+    OPENAI = "openai"
+    HF = "huggingface"
+
+    @classmethod
+    def _missing_(cls, value):
+        """대소문자와 앞뒤 공백을 봐준다. .env 나 CSV 에서 오는 값이 지저분하다.
+
+        Args:
+            value: 매칭에 실패한 원래 값.
+
+        Returns:
+            맞는 멤버, 없으면 None (그러면 파이썬이 ValueError 를 낸다).
+        """
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip().lower()
+        for member in cls:
+            if cleaned in (member.value, member.name.lower()):
+                return member
+        return None
+
+    @classmethod
+    def list_values(cls):
+        """에러 메시지에 "선택 가능한 값" 을 찍을 때 쓴다.
+
+        Returns:
+            문자열 값 리스트.
+        """
+        return [member.value for member in cls]
 
 
 def make_dirs():
