@@ -31,6 +31,7 @@ from evaluation.generation import (
 )
 from evaluation.retrieval import (
     compare,
+    fit_budget,
     doc_hit_rate,
     hit_rate,
     mrr,
@@ -43,6 +44,7 @@ __all__ = [
     "cite_rate",
     "compare",
     "doc_hit_rate",
+    "fit_budget",
     "evaluate_answers",
     "hit_rate",
     "judge_faithfulness",

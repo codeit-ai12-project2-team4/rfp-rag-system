@@ -81,18 +81,58 @@ def doc_hit_rate(pairs, search, k=5):
     return hits / len(pairs) if pairs else 0.0
 
 
-def score_all(pairs, search, k=5, mrr_k=10):
-    """지표 세 개를 한 번에. 표로 비교할 때 쓴다.
+def fit_budget(chunks, budget):
+    """컨텍스트 예산 안에 들어가는 청크만 앞에서부터 남긴다.
+
+    **청크가 크면 적중률@5 는 그냥 올라간다.** 극단적으로 문서 하나를 청크
+    하나로 만들면 적중률이 1.0 이 된다. 크기가 다른 설정을 비교하려면 개수가
+    아니라 **글자 수를 맞춰야** 공정하다. 생성 단계가 실제로 받는 것도 개수가
+    아니라 글자 수다 (`settings.MAX_CONTEXT_CHARS`).
+
+    Args:
+        chunks: 검색 결과 Document 리스트 (점수 순).
+        budget: 넣을 수 있는 최대 글자 수.
+
+    Returns:
+        예산 안에 들어가는 앞쪽 청크들. 첫 청크가 예산보다 커도 하나는 넣는다.
+    """
+    kept, used = [], 0
+    for chunk in chunks:
+        size = len(chunk.page_content)
+        if kept and used + size > budget:
+            break
+        kept.append(chunk)
+        used += size
+    return kept
+
+
+def score_all(pairs, search, k=5, mrr_k=10, budget=None):
+    """지표를 한 번에 잰다. 표로 비교할 때 쓴다.
 
     검색은 질문당 한 번만 돈다. hit_rate / mrr / doc_hit_rate 를 따로 부르면
     세 번 돌아서 세 배 느리다.
+
+    Args:
+        pairs: `{"question", "keywords", "doc_id"}` 꼴 질문 리스트.
+        search: 질문을 받아 Document 리스트를 돌려주는 함수.
+        k: 적중률과 doc 적중률을 볼 상위 개수.
+        mrr_k: MRR 을 볼 상위 개수.
+        budget: 글자 수 예산. 주면 **상위 k개 대신 예산에 들어가는 만큼**을 본다.
+            청크 크기가 다른 설정을 공정하게 비교할 때 쓴다.
+
+    Returns:
+        적중률·MRR·doc적중률·질문수를 담은 dict. budget 을 주면 평균 청크수와
+        평균 글자수도 함께 담는다. pairs 가 비면 빈 dict.
     """
     if not pairs:
         return {}
 
     hits = rank_sum = doc_hits = 0.0
+    used_chunks = used_chars = 0
     for pair, chunks in _search_once(pairs, search, max(k, mrr_k)):
-        top = chunks[:k]
+        top = fit_budget(chunks, budget) if budget else chunks[:k]
+        used_chunks += len(top)
+        used_chars += sum(len(c.page_content) for c in top)
         hits += any(matches(c.page_content, pair["keywords"]) for c in top)
 
         for rank, chunk in enumerate(chunks[:mrr_k], 1):
@@ -105,15 +145,20 @@ def score_all(pairs, search, k=5, mrr_k=10):
             doc_hits += any(c.metadata.get("doc_id") == gold for c in top)
 
     n = len(pairs)
-    return {
-        f"적중률@{k}": round(hits / n, 3),
+    label = f"@{budget}자" if budget else f"@{k}"
+    out = {
+        f"적중률{label}": round(hits / n, 3),
         "MRR": round(rank_sum / n, 3),
-        f"doc_hits@{k}": round(doc_hits / n, 3),
+        f"doc_hits{label}": round(doc_hits / n, 3),
         "질문수": n,
     }
+    if budget:
+        out["평균청크수"] = round(used_chunks / n, 1)
+        out["평균글자"] = int(used_chars / n)
+    return out
 
 
-def compare(setups, pairs, k=5, verbose=True):
+def compare(setups, pairs, k=5, verbose=True, budget=None):
     """여러 설정을 한 표로 비교한다.
 
         bm25 = BM25(chunks, k=5)          # ← 루프 밖에서 미리 만든다
@@ -126,6 +171,16 @@ def compare(setups, pairs, k=5, verbose=True):
     **주의** — lambda 안에서 `BM25(chunks)` 나 `Pipeline([...])` 를 만들면 안 된다.
     질문마다 인덱스를 새로 만들게 되어 수십 배 느려진다. 검색기는 밖에서 한 번
     만들어 두고 lambda 는 그걸 부르기만 하게 한다.
+
+    Args:
+        setups: `{설정 이름: 검색 함수}`. 검색 함수는 질문을 받아 Document 리스트.
+        pairs: 질문 리스트.
+        k: 상위 몇 개를 볼지. budget 을 주면 무시된다.
+        verbose: 설정마다 걸린 시간을 찍을지.
+        budget: 글자 예산. 청크 크기가 다른 설정을 공정하게 비교할 때 준다.
+
+    Returns:
+        설정별 지표 DataFrame. 적중률 → MRR 순으로 내림차순 정렬.
     """
     import time
 
@@ -134,7 +189,7 @@ def compare(setups, pairs, k=5, verbose=True):
     rows = []
     for name, search in setups.items():
         started = time.time()
-        row = {"설정": name, **score_all(pairs, search, k=k)}
+        row = {"설정": name, **score_all(pairs, search, k=k, budget=budget)}
         elapsed = time.time() - started
         row["초"] = round(elapsed, 1)
         rows.append(row)
@@ -144,7 +199,8 @@ def compare(setups, pairs, k=5, verbose=True):
                 print(
                     "     느립니다. lambda 안에서 검색기를 새로 만들고 있지 않은지 확인하세요."
                 )
-    return pd.DataFrame(rows).sort_values(f"적중률@{k}", ascending=False)
+    label = f"@{budget}자" if budget else f"@{k}"
+    return pd.DataFrame(rows).sort_values([f"적중률{label}", "MRR"], ascending=False)
 
 
 def _run_search(search, question):
