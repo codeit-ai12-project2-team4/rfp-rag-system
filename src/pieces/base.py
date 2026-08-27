@@ -37,7 +37,6 @@
     rag = Pipeline([
         Dense(store, k=20),
         Rerank(reranker, k=5),
-        Generate(llm),
     ])
     result = rag("과업기간이 가장 짧은 공고는?")
 """
@@ -52,14 +51,12 @@ class State:
     question  사용자가 처음 물어본 것. 부품이 바꾸지 않는다.
     queries   실제로 검색에 쓸 질문들. 지금은 [question] 하나다.
     chunks    지금까지 모인 청크. 검색이 채우고 정제가 줄인다.
-    answer    Generate 가 채운다.
     log       부품마다 "내가 뭘 했는지" 한 줄씩. trace() 로 본다.
     """
 
     question: str
     queries: list = field(default_factory=list)
     chunks: list = field(default_factory=list)
-    answer: str = None
     log: list = field(default_factory=list)
 
     def note(self, message):
@@ -86,9 +83,6 @@ class State:
             body = chunk.page_content[:chars].replace("\n", " ⏎ ")
             print(f"  {i}. [{title}]{score_text}")
             print(f"     {body}…")
-        if self.answer:
-            print("-" * 60)
-            print(self.answer)
 
     def trace(self):
         """부품들이 남긴 기록을 순서대로 출력한다."""

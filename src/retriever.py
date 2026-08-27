@@ -76,7 +76,7 @@ for _folder in (_ROOT / "src", _ROOT):
 from config import settings
 from evaluation import fit_budget
 from models import load_embedder, load_reranker
-from pieces import Dense, Pipeline, Rerank, format_context
+from pieces import Dense, Pipeline, Rerank
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
@@ -126,6 +126,30 @@ def retrieve(
         Rerank(reranker, k=top_k),
     ])
     return pipeline(query).chunks
+
+
+def format_context(chunks):
+    """청크를 번호 붙여 프롬프트용 문자열로 잇는다.
+
+    이 `[1] [2]` 번호가 그대로 인용 번호가 된다. `sources()` 가 돌려주는
+    `n` 과 짝이 맞으므로, 답변에 달린 번호로 출처를 되짚을 수 있다.
+
+    Args:
+        chunks: `retrieve()` 가 돌려준 청크.
+
+    Returns:
+        `[1] 사업명 · 발주기관 · 절제목` 머리를 붙이고 `---` 로 이은 문자열.
+    """
+    blocks = []
+    for i, chunk in enumerate(chunks, 1):
+        title = chunk.metadata.get("title", "")
+        agency = chunk.metadata.get("agency", "")
+        section = chunk.metadata.get("section", "")
+        head = f"[{i}] {title} · {agency}"
+        if section:
+            head += f" · {section}"
+        blocks.append(head + "\n" + chunk.page_content)
+    return "\n\n---\n\n".join(blocks)
 
 
 def fit_context(chunks, budget=None):

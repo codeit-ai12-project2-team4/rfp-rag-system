@@ -17,9 +17,9 @@ result = generate_answer(model_key="mini", query="이 사업의 예산이 얼마
 
 | 헷갈리기 쉬운 것 | 답 |
 |---|---|
-| `src/generation.py` 와 `src/pieces/generate.py` | **팀 파이프라인은 `src/generation.py`.** `pieces/generate.py` 는 조립대 실험용이다 |
 | `pieces/search.py` 와 `retriever.py` | `search.py` 는 부품, `retriever.py` 는 그걸 조립해 놓은 창구. 밖에서는 `retriever.py` 만 쓴다 |
 | `evaluation/generation.py` | 생성 **지표** (근거표시율·물러섬·충실성). 생성 로직이 아니다 |
+| `pieces/` 안에 생성 부품이 없는 이유 | 답을 만드는 곳은 `src/generation.py` 하나다. 프롬프트가 두 벌이 되지 않게 `pieces/` 는 검색까지만 한다 |
 
 ## 인계 파일 — 검색 없이 생성만 돌릴 때
 
@@ -66,7 +66,7 @@ for row in map(json.loads, open("contexts_eval_qa.jsonl", encoding="utf-8")):
 | `chunking.py` | `chunking.py` | 그대로 |
 | `embedding.py` | `models/embed.py` | 리랭커·LLM 로더와 한 묶음 (`models/`) |
 | `vectorstore.py` | `vectorstore.py` | 그대로 |
-| `retriever.py` | `retriever.py` | 부품은 `pieces/` 에 있고 이 파일이 조립한다 |
+| `retriever.py` | `retriever.py` | 검색 부품은 `pieces/` 에 있고 이 파일이 조립한다 |
 | `generation.py` | `generation.py` | 그대로 |
 | `evaluation.py` | `evaluation/` | 검색 지표와 생성 지표를 분리 (담당이 다르다) |
 
@@ -93,11 +93,10 @@ models/              모델 붙이기. 부품 쪽 코드는 안 바뀐다
   llm.py               openai / vllm(8087) / hf / echo
   health.py            check_servers() — 뭐가 떠 있는지 한눈에
 
-pieces/              retriever.py 가 쓰는 부품. 갈아끼우며 A/B 하려고 나눠 뒀다
+pieces/              retriever.py 가 쓰는 검색 부품. 갈아끼우며 A/B 하려고 나눠 뒀다
   base.py              Pipeline, State
   search.py            Dense · BM25 · Hybrid · FilterBy
   refine.py            Rerank · TopK · Widen
-  generate.py          Generate, format_context
 
 evaluation/
   evalset.py           질문 세트 만들기·저장 (→ data/eval_qa.json)
@@ -120,7 +119,7 @@ from src.generation import generate_answer
 from config import settings
 from preprocessing import load_documents
 from models import load_embedder
-from pieces import Pipeline, Dense, Rerank
+from pieces import Pipeline, Dense, Rerank    # 검색 부품. 밖에서는 쓸 일 없다
 ```
 
 ## 실행 — 산출물을 만드는 건 src 안의 파일이다
