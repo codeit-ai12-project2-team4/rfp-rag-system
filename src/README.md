@@ -1,9 +1,64 @@
 # src — 파일 역할과 실행 방법
 
+## generation 파트가 볼 것은 두 개뿐이다
+
+```python
+from src.retriever import retrieve_context      # 질문 → 발췌 문자열
+from src.generation import generate_answer      # 질문 + 발췌 → 답변
+
+context = retrieve_context("이 사업의 예산이 얼마야?")
+result = generate_answer(model_key="mini", query="이 사업의 예산이 얼마야?", context=context)
+```
+
+프로젝트 루트에서 실행하면 된다. `retriever.py` 가 경로를 알아서 잡는다.
+
+**단, `retrieve_context()` 는 TEI 서버(8085 · 8086)와 FAISS 인덱스가 있어야 돈다.**
+그게 없는 상태로 생성 쪽만 확인하려면 검색 결과를 파일로 받는다 — 아래 "인계 파일".
+
+| 헷갈리기 쉬운 것 | 답 |
+|---|---|
+| `src/generation.py` 와 `src/pieces/generate.py` | **팀 파이프라인은 `src/generation.py`.** `pieces/generate.py` 는 조립대 실험용이다 |
+| `pieces/search.py` 와 `retriever.py` | `search.py` 는 부품, `retriever.py` 는 그걸 조립해 놓은 창구. 밖에서는 `retriever.py` 만 쓴다 |
+| `evaluation/generation.py` | 생성 **지표** (근거표시율·물러섬·충실성). 생성 로직이 아니다 |
+
+## 인계 파일 — 검색 없이 생성만 돌릴 때
+
+검색 담당이 아래를 돌려 `contexts_eval_qa.jsonl` 을 만들어 전달한다.
+(`outputs/` 는 gitignore 대상이라 repo 에 없다. 파일로 받으면 된다.)
+
+```bash
+python src/retriever.py --export
+```
+
+한 줄이 곧 `generate_answer()` 한 번이다.
+
+```python
+import json
+
+for row in map(json.loads, open("contexts_eval_qa.jsonl", encoding="utf-8")):
+    result = generate_answer(model_key="mini", query=row["question"], context=row["context"])
+```
+
+```json
+{
+  "qid": "요구사항-001",
+  "question": "「…벤처확인종합관리시스템…」의 SFR-001 요구사항 명칭은 무엇인가?",
+  "type": "요구사항",
+  "answerable": true,
+  "doc_ids": ["20240330003-0"],
+  "keywords": ["사용자 인증 기능 구현"],
+  "context": "[1] 사업명 · 발주기관\n…",
+  "sources": [{"n": 1, "doc_id": "…", "title": "…", "chunk_id": "…::0000"}],
+  "chunks": 4, "chars": 4920
+}
+```
+
+`answerable: false` 인 질문은 발췌에 답이 없는 것이 정답이다. 물러서야 맞다.
+`keywords` 는 채점 참고용이라 프롬프트에 넣지 않는다.
+
 ## 팀 표준 구조와의 대응
 
 팀 규칙은 파일 하나씩이지만, 여기서는 **부품이 여러 개인 단계만 디렉토리**로 두었다.
-역할은 그대로다.
 
 | 팀 규칙 | 여기 | 왜 |
 |---|---|---|
@@ -11,13 +66,15 @@
 | `chunking.py` | `chunking.py` | 그대로 |
 | `embedding.py` | `models/embed.py` | 리랭커·LLM 로더와 한 묶음 (`models/`) |
 | `vectorstore.py` | `vectorstore.py` | 그대로 |
-| `retriever.py` | `pieces/search.py` | Dense · BM25 · Hybrid · FilterBy 를 갈아끼운다 |
-| `generation.py` | `pieces/generate.py` | Generate · MakeCard |
+| `retriever.py` | `retriever.py` | 부품은 `pieces/` 에 있고 이 파일이 조립한다 |
+| `generation.py` | `generation.py` | 그대로 |
 | `evaluation.py` | `evaluation/` | 검색 지표와 생성 지표를 분리 (담당이 다르다) |
 
 ## 파일
 
 ```
+retriever.py         질문 → 발췌. 밖으로 나가는 창구 (generation · UI)
+generation.py        발췌 → 답변. OpenAI / HuggingFace
 chunking.py          documents.jsonl → 청크. section / recursive / semantic
 vectorstore.py       FAISS 인덱스 만들기·불러오기
 resources.py         메모리·디스크 감시 (VM 이 멈추는 걸 막는다)
@@ -36,12 +93,11 @@ models/              모델 붙이기. 부품 쪽 코드는 안 바뀐다
   llm.py               openai / vllm(8087) / hf / echo
   health.py            check_servers() — 뭐가 떠 있는지 한눈에
 
-pieces/              검색·생성 부품. nn.Sequential 처럼 끼우고 뺀다
+pieces/              retriever.py 가 쓰는 부품. 갈아끼우며 A/B 하려고 나눠 뒀다
   base.py              Pipeline, State
   search.py            Dense · BM25 · Hybrid · FilterBy
-  expand.py            AddKeywords · QueryRewrite · MultiQuery
-  refine.py            Rerank · Compress · TopK · Widen
-  generate.py          Generate · MakeCard
+  refine.py            Rerank · TopK · Widen
+  generate.py          Generate, format_context
 
 evaluation/
   evalset.py           질문 세트 만들기·저장 (→ data/eval_qa.json)
@@ -51,56 +107,48 @@ evaluation/
 
 ## import 규칙
 
-`src/` 를 sys.path 에 넣고 **평평하게** 쓴다. 설정만 루트의 `config` 에서 가져온다.
+밖에서 부를 때는 `src.` 를 붙인다.
 
 ```python
-import sys
-from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT))
-
-from config import settings
-import chunking
-from preprocessing import load_documents
-from models import load_embedder
-from pieces import Pipeline, Dense, BM25, Hybrid, Rerank, Generate
+from src.retriever import retrieve_context, search_notices
+from src.generation import generate_answer
 ```
 
-`from src.preprocessing import ...` 는 안 된다. 패키지 내부가 평평한 import 를 쓴다.
+`src/` **안에서는** 평평하게 쓴다. 설정만 루트의 `config` 에서 가져온다.
+
+```python
+from config import settings
+from preprocessing import load_documents
+from models import load_embedder
+from pieces import Pipeline, Dense, Rerank
+```
 
 ## 실행 — 산출물을 만드는 건 src 안의 파일이다
 
-각 단계가 자기 산출물을 직접 만든다. `scripts/` 는 실험·점검용이지 파이프라인이
-아니다.
+각 단계가 자기 산출물을 직접 만든다.
 
 ```bash
 python src/preprocessing/run.py                     → data/processed/documents.jsonl
 python src/chunking.py                              → outputs/chunks/chunks_*.jsonl
 python src/vectorstore.py --chunks <청크이름>        → outputs/vectorstore/<이름>/
+python src/retriever.py "질문"                       → 무엇이 뽑히는지 눈으로 확인
+python src/retriever.py --export                    → outputs/eval_results/contexts_*.jsonl
 ```
 
 이름이 이어진다. `chunking.py` 가 다음에 칠 명령을 찍어 주므로 그대로 붙이면 된다.
 
 ```
-python src/chunking.py --docs cleaned_documents --how recursive --size 1500
-  → outputs/chunks/chunks_cleaned_documents__recursive_1500_200.jsonl
-  → 다음:  python src/vectorstore.py --chunks cleaned_documents__recursive_1500_200
-  → outputs/vectorstore/cleaned_documents__recursive_1500_200__tei/
+python src/chunking.py --docs cleaned_documents --how recursive --size 1200
+  → outputs/chunks/chunks_cleaned_documents__recursive_1200_200.jsonl
+  → 다음:  python src/vectorstore.py --chunks cleaned_documents__recursive_1200_200
+  → outputs/vectorstore/cleaned_documents__recursive_1200_200__tei/
 ```
 
 **전처리본 · 자르기 설정 · 임베딩이 이름 하나에 다 남는다.** A/B 를 여러 벌
 돌려도 어느 조합인지 파일 이름만 보면 안다.
 
-### scripts/ — 실험과 점검
-
-```bash
-python scripts/check_setup.py       import · 데이터 · 서버 점검
-python scripts/eval_tables.py       표 추출 점검 (--dump 로 눈으로 대조)
-python scripts/compare_chunking.py  청킹 설정 A/B (--docs 로 전처리본까지)
-```
-
-서버는 `docker/` 에서 띄운다 (TEI 임베딩 8085 · 리랭커 8086).
+`data/` 와 `outputs/` 는 gitignore 대상이다 (원본 RFP 가 NDA). clone 만으로는
+비어 있으니 위 순서대로 한 번 돌리거나, 검색 담당에게 인계 파일을 받는다.
 
 ## 주석은 구글 스타일
 
@@ -120,5 +168,5 @@ def load_store(name, embedder):
     """
 ```
 
-`chunking.py`, `vectorstore.py`, `preprocessing/run.py` 의 `main()` 은 옮겼다.
-나머지 파일은 아직 서술형이다.
+`chunking.py`, `vectorstore.py`, `retriever.py`, `preprocessing/run.py` 의 `main()`
+은 옮겼다. 나머지 파일은 아직 서술형이다.

@@ -103,8 +103,7 @@ def keep_docs(chunks, doc_ids):
 def run_search(searcher, state):
     """state.queries 를 전부 검색하고 중복을 없앤다.
 
-    Dense / BM25 / Hybrid 의 __call__ 이 이것 한 줄이다. queries 가 여러 개인
-    건 MultiQuery 나 AddKeywords 가 앞에서 늘렸을 때다.
+    Dense / BM25 / Hybrid 의 __call__ 이 이것 한 줄이다.
     """
     found = []
     for query in state.queries or [state.question]:

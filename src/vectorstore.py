@@ -25,8 +25,9 @@ from pathlib import Path
 # `python src/vectorstore.py` 로 직접 돌릴 때 config 를 찾게 한다.
 # import 로 쓸 때는 이미 경로에 있어서 아무 일도 안 한다.
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+for _folder in (_ROOT / "src", _ROOT):
+    if str(_folder) not in sys.path:
+        sys.path.insert(0, str(_folder))
 
 # langchain-community 가 sunset 경고를 띄운다. FAISS 자체는 멀쩡하고,
 # 대안이라던 langchain-faiss(PyPI)는 빈 껍데기라 드롭인 교체가 없다.

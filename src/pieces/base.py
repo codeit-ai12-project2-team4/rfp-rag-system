@@ -50,11 +50,9 @@ class State:
     """부품 사이를 흘러가는 상자.
 
     question  사용자가 처음 물어본 것. 부품이 바꾸지 않는다.
-    queries   실제로 검색에 쓸 질문들. 처음엔 [question] 하나이고
-              AddKeywords / QueryRewrite / MultiQuery 가 바꾸거나 늘린다.
+    queries   실제로 검색에 쓸 질문들. 지금은 [question] 하나다.
     chunks    지금까지 모인 청크. 검색이 채우고 정제가 줄인다.
     answer    Generate 가 채운다.
-    card      MakeCard 가 채운다.
     log       부품마다 "내가 뭘 했는지" 한 줄씩. trace() 로 본다.
     """
 
@@ -62,7 +60,6 @@ class State:
     queries: list = field(default_factory=list)
     chunks: list = field(default_factory=list)
     answer: str = None
-    card: dict = None
     log: list = field(default_factory=list)
 
     def note(self, message):

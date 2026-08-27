@@ -66,11 +66,12 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-# `python src/retriever.py` 로 직접 돌릴 때 config 를 찾게 한다.
-# import 로 쓸 때는 이미 경로에 있어서 아무 일도 안 한다.
+# 프로젝트 루트와 src/ 를 경로에 넣는다. 이래야 `python src/retriever.py` 도,
+# 다른 폴더에서 `from src.retriever import ...` 도 똑같이 된다.
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+for _folder in (_ROOT / "src", _ROOT):
+    if str(_folder) not in sys.path:
+        sys.path.insert(0, str(_folder))
 
 from config import settings
 from evaluation import fit_budget

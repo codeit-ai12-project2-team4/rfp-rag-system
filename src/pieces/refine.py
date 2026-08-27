@@ -4,12 +4,9 @@
 후보에 들어오고, 좁혀야 프롬프트가 짧아지고 LLM 이 헷갈리지 않는다.
 
 Rerank    질문과 청크를 쌍으로 다시 채점해 순서를 고친다
-Compress  청크 안에서 질문과 상관없는 문장을 지운다
 TopK      그냥 앞에서 n개만
 Widen     찾은 청크의 앞뒤 청크까지 끌어온다
 """
-
-import numpy as np
 
 from pieces.base import dedup_chunks
 
@@ -55,83 +52,6 @@ class Rerank:
 
     def __repr__(self):
         return f"Rerank(k={self.k})"
-
-
-class Compress:
-    """청크 안에서 질문과 관련 없는 문장을 지운다.
-
-    청크 하나가 1,000자여도 정작 답은 한 문장인 경우가 많다. 나머지는
-    프롬프트만 길게 만들고 LLM 을 헷갈리게 한다.
-
-    문장마다 질문과의 코사인 유사도를 재서 threshold 아래를 버린다.
-    강의 L05 의 compress_chunk 와 같은 방식이다.
-
-    threshold 를 너무 올리면 정답 문장까지 날아간다. 0.3~0.5 사이에서
-    노트북으로 직접 보면서 정하는 게 낫다.
-    """
-
-    def __init__(self, embedder, threshold=0.35, min_sentences=1):
-        self.embedder = embedder
-        self.threshold = threshold
-        self.min_sentences = min_sentences
-
-    def split_sentences(self, text):
-        """줄바꿈과 마침표로 문장을 나눈다. RFP 는 개조식이라 줄바꿈이 더 중요하다."""
-        parts = []
-        for line in text.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            if len(line) < 80:
-                parts.append(line)
-            else:
-                for piece in line.split(". "):
-                    piece = piece.strip()
-                    if piece:
-                        parts.append(piece)
-        return parts
-
-    def __call__(self, state):
-        if not state.chunks:
-            return state
-
-        question_vector = np.array(self.embedder.embed_query(state.question))
-        kept_total = dropped_total = 0
-
-        for chunk in state.chunks:
-            sentences = self.split_sentences(chunk.page_content)
-            if len(sentences) <= self.min_sentences:
-                continue
-
-            vectors = np.array(self.embedder.embed_documents(sentences))
-            similarities = (
-                vectors
-                @ question_vector
-                / (
-                    np.linalg.norm(vectors, axis=1) * np.linalg.norm(question_vector)
-                    + 1e-9
-                )
-            )
-
-            kept = [
-                s
-                for s, sim in zip(sentences, similarities, strict=False)
-                if sim >= self.threshold
-            ]
-            # 전부 잘리면 제일 비슷한 문장만이라도 남긴다
-            if len(kept) < self.min_sentences:
-                best = int(np.argmax(similarities))
-                kept = [sentences[best]]
-
-            kept_total += len(kept)
-            dropped_total += len(sentences) - len(kept)
-            chunk.page_content = "\n".join(kept)
-
-        state.note(f"문장 {kept_total}개 남기고 {dropped_total}개 버림")
-        return state
-
-    def __repr__(self):
-        return f"Compress(threshold={self.threshold})"
 
 
 class TopK:
