@@ -16,55 +16,48 @@ JupyterHub 가 죽으면 접속 자체가 안 된다. 팀 공용 VM 이면 남�
 import os
 import shutil
 
+import psutil
+
 # 이 값보다 남은 메모리가 적으면 위험하다고 본다 (GB)
 DANGER_GB = 1.5
-
-
-def _meminfo():
-    """/proc/meminfo 를 읽어 kB 단위 dict 로."""
-    values = {}
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                key, _, rest = line.partition(":")
-                values[key] = int(rest.split()[0])
-    except Exception:
-        pass
-    return values
 
 
 def memory():
     """전체 / 쓰는 중 / 남은 메모리를 GB 로.
 
-    'available' 이 실제로 쓸 수 있는 양이다. 'free' 는 캐시를 빼고 세기 때문에
+    `available` 이 실제로 쓸 수 있는 양이다. `free` 는 캐시를 빼고 세기 때문에
     항상 작게 나오는데, 캐시는 필요하면 커널이 알아서 비운다. available 을 볼 것.
+
+    `/proc/meminfo` 를 직접 읽다가 맥에서 `FileNotFoundError` 로 터졌다.
+    psutil 은 이미 requirements 에 있고 맥·리눅스를 다 본다.
+
+    Returns:
+        총량·가용·사용·스왑을 GB 로 담은 dict. 못 읽으면 빈 dict.
     """
-    info = _meminfo()
-    if not info:
+    try:
+        virtual = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+    except OSError:
         return {}
-    total = info.get("MemTotal", 0) / 1024**2
-    available = info.get("MemAvailable", info.get("MemFree", 0)) / 1024**2
-    swap_total = info.get("SwapTotal", 0) / 1024**2
-    swap_free = info.get("SwapFree", 0) / 1024**2
     return {
-        "total_gb": round(total, 1),
-        "available_gb": round(available, 1),
-        "used_gb": round(total - available, 1),
-        "swap_gb": round(swap_total, 1),
-        "swap_used_gb": round(swap_total - swap_free, 1),
+        "total_gb": round(virtual.total / 1024**3, 1),
+        "available_gb": round(virtual.available / 1024**3, 1),
+        "used_gb": round((virtual.total - virtual.available) / 1024**3, 1),
+        "swap_gb": round(swap.total / 1024**3, 1),
+        "swap_used_gb": round(swap.used / 1024**3, 1),
     }
 
 
 def process_memory_gb():
-    """이 파이썬 프로세스(=커널) 하나가 실제로 붙잡고 있는 물리 메모리."""
+    """이 파이썬 프로세스(=커널) 하나가 실제로 붙잡고 있는 물리 메모리.
+
+    Returns:
+        GB. 못 읽으면 None.
+    """
     try:
-        with open(f"/proc/{os.getpid()}/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return round(int(line.split()[1]) / 1024**2, 2)
-    except Exception:
-        pass
-    return None
+        return round(psutil.Process(os.getpid()).memory_info().rss / 1024**3, 2)
+    except (psutil.Error, OSError):
+        return None
 
 
 def free_disk_gb(path="/"):
@@ -75,7 +68,7 @@ def show_memory(label=""):
     """한 줄로 찍는다. 무거운 셀 앞뒤에 넣어 두면 어디서 늘었는지 보인다."""
     stat = memory()
     if not stat:
-        print("메모리 정보를 읽을 수 없습니다 (리눅스가 아닌 듯)")
+        print("메모리 정보를 읽을 수 없습니다")
         return stat
 
     mine = process_memory_gb()
@@ -135,7 +128,7 @@ def limit_memory(gb):
     import resource
 
     limit = int(gb * 1024**3)
-    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
     if hard != resource.RLIM_INFINITY:
         limit = min(limit, hard)
     resource.setrlimit(resource.RLIMIT_AS, (limit, hard))

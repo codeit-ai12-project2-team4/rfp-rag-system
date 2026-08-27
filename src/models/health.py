@@ -19,14 +19,14 @@ def check_servers():
         try:
             info = requests.get(f"{url}/info", timeout=3).json()
             print(f"  O  {label:<14} {url}  →  {info.get('model_id')}")
-        except Exception:
+        except (OSError, ValueError):  # 서버 없음/응답 이상
             print(f"  X  {label:<14} {url}  →  응답 없음")
 
     try:
         models = requests.get(f"{VLLM_URL}/models", timeout=3).json()
         served = [m["id"] for m in models.get("data", [])]
         print(f"  O  {'생성 (vLLM)':<14} {VLLM_URL}  →  {served}")
-    except Exception:
+    except (OSError, ValueError):  # 서버 없음/응답 이상
         print(f"  X  {'생성 (vLLM)':<14} {VLLM_URL}  →  응답 없음")
 
     key = os.environ.get("OPENAI_API_KEY")

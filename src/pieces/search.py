@@ -54,7 +54,7 @@ def korean_tokens(text):
             if token.tag.startswith(("N", "V", "SL", "SN", "SH"))
             and len(token.form) > 1
         ]
-    except Exception:
+    except ImportError:  # kiwipiepy 없음 — 공백으로 자른다
         return text.split()
 
 
@@ -78,7 +78,7 @@ def korean_tokens_batch(texts):
                 if t.tag.startswith(("N", "V", "SL", "SN", "SH")) and len(t.form) > 1
             ])
         return out
-    except Exception:
+    except ImportError:  # kiwipiepy 없음
         return [korean_tokens(t) for t in texts]
 
 
