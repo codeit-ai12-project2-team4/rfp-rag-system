@@ -9,6 +9,17 @@
 
 전부 langchain Document 리스트를 받아 Document 리스트를 돌려준다.
 
+## 목차를 먼저 지운다
+
+목차에는 문서의 모든 절 제목이 한자리에 모여 있어서 **어떤 질문에도 조금씩
+걸린다.** 실제로 "그럼 참가자격은?" 을 던졌더니 목차 청크가 1위로 올라왔다 —
+"입찰 참가자격爜ȃ37" 이라는 글자는 있지만 답은 쪽번호뿐이다. 게다가 한글에서
+새어나온 깨진 쪽번호(`爜ȃ`, 라틴확장B)까지 붙어 있다.
+
+`cleaned_documents.jsonl` 은 팀원이 만든 것이라 우리 `drop_toc` 을 안 탔다.
+그래서 자른 **뒤에** 목차 청크를 버린다 (`--raw` 로 끌 수 있다).
+문서 단위로 지우면 안 된다 — `drop_toc_chunks` 주석 참고.
+
 명령줄로 돌리면 `outputs/chunks/` 에 청크 파일이 떨어진다.
 
     python src/chunking.py
@@ -27,10 +38,10 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from langchain_core.documents import Document  # noqa: E402
-from langchain_text_splitters import RecursiveCharacterTextSplitter  # noqa: E402
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from config import settings  # noqa: E402
+from config import settings
 
 # RFP 목차 헤딩 패턴. 위에 있는 것부터 검사한다.
 #   Ⅰ. 사업 안내 / 제1장 총칙 / 1. 사업개요 / □ 사 업 명
@@ -291,6 +302,75 @@ def with_header(chunks, include_section=True):
     return out
 
 
+# --- 목차 청크 버리기 -------------------------------------------------------
+
+
+def leader_count(text):
+    """한글에서 새어나온 깨진 쪽번호 글자 수.
+
+    한글 문서의 목차는 `Ⅰ. 사업개요 ⋯⋯ 1` 의 점선과 쪽번호가 필드 코드로 들어
+    있어서, 글자로 뽑으면 라틴확장B(U+0180~U+024F) 영역으로 샌다.
+    `4. 세부 작성지침爜ȃ35` 처럼 보인다. **한글 본문에는 이 영역 글자가 안 나오므로
+    목차를 찾는 값싼 신호가 된다.**
+
+    Args:
+        text: 청크 본문.
+
+    Returns:
+        라틴확장B 글자 수.
+    """
+    return sum(1 for ch in text if "\u0180" <= ch <= "\u024f")
+
+
+def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
+    """목차 **줄**을 지운다. 목차만 남는 청크는 버린다.
+
+    목차에는 문서의 모든 절 제목이 한자리에 모여 있어서 **어떤 질문에도 조금씩
+    걸린다.** 실제로 "그럼 참가자격은?" 을 던졌더니 목차 청크가 1위로 올라왔다 —
+    "입찰 참가자격爜ȃ37" 이라는 글자는 있지만 답은 쪽번호뿐이다.
+
+    **청크를 통째로 버리면 안 된다.** 문서 첫 청크는 보통
+    `표지 + 사업개요 표 + 목차` 가 한 덩어리다. 통째로 버렸더니 의역 유형 정답
+    17개(`49,500천원`, `900,000,000원` …)가 같이 사라져 적중률이
+    0.550 → 0.175 로 무너졌다. 목차 줄만 골라 지우고 나머지는 남긴다.
+
+    문서 단위로 `preprocessing.drop_toc` 을 돌리는 것도 안 된다. 팀원이 만든
+    `cleaned_documents.jsonl` 은 칸마다 줄이 나뉜 형식이라 문서 전체를 목차로
+    보고 **8,743,663자를 200자로 만들어 버린다.**
+
+    남은 줄의 본문은 손대지 않는다. `preprocessing.strip_toc_leaders` 를 돌리면
+    `[⺀-鿿]?[ƀ-ʯ]+\s*\d*` 의 `\s*\d*` 가 라틴확장 뒤의 **진짜 숫자까지** 먹는다
+    (`사업예산籄ȃ 49,500천원` → `사업예산 ,500천원`).
+
+    Args:
+        chunks: 자른 Document 리스트.
+        min_leaders: 깨진 쪽번호 글자가 이만큼 있는 청크만 손댄다.
+        min_chars: 목차 줄을 뺀 뒤 이보다 짧으면 목차뿐인 청크로 보고 버린다.
+        verbose: 몇 개를 손댔는지 찍을지.
+
+    Returns:
+        목차 줄을 걷어낸 새 리스트.
+    """
+    kept, trimmed, dropped = [], 0, 0
+    for chunk in chunks:
+        if leader_count(chunk.page_content) < min_leaders:
+            kept.append(chunk)
+            continue
+        body = "\n".join(
+            line for line in chunk.page_content.split("\n") if leader_count(line) == 0
+        ).strip()
+        if len(body) < min_chars:
+            dropped += 1
+            continue
+        chunk.page_content = body
+        trimmed += 1
+        kept.append(chunk)
+    if verbose:
+        print(f"목차 줄 정리: {trimmed}개 청크에서 목차만 걷어냄 · "
+              f"{dropped}개는 목차뿐이라 버림")
+    return kept
+
+
 # --- 저장하고 불러오기 -----------------------------------------------------
 
 
@@ -376,14 +456,23 @@ def main():
     parser = argparse.ArgumentParser(
         description="문서를 잘라 outputs/chunks 에 저장한다."
     )
-    parser.add_argument("--docs", default="documents",
-                        help="data/processed 안의 jsonl 이름 (확장자 없이)")
+    parser.add_argument(
+        "--docs",
+        default="documents",
+        help="data/processed 안의 jsonl 이름 (확장자 없이)",
+    )
     parser.add_argument("--how", default="section", choices=["section", "recursive"])
     parser.add_argument("--size", type=int, default=1000)
     parser.add_argument("--overlap", type=int, default=150)
-    parser.add_argument("--header", action="store_true",
-                        help="청크 앞에 [사업명] 을 붙인다. 임베딩용이고 BM25 에는 해롭다")
+    parser.add_argument(
+        "--header",
+        action="store_true",
+        help="청크 앞에 [사업명] 을 붙인다. 임베딩용이고 BM25 에는 해롭다",
+    )
     parser.add_argument("--name", help="저장 이름 (생략하면 설정에서 자동으로 만든다)")
+    parser.add_argument(
+        "--raw", action="store_true", help="목차·깨진 쪽번호를 안 지운다 (비교용)"
+    )
     args = parser.parse_args()
 
     from preprocessing import load_documents  # 명령줄로 쓸 때만 필요하다
@@ -393,13 +482,21 @@ def main():
 
     split = split_by_section if args.how == "section" else split_recursive
     chunks = split(documents, size=args.size, overlap=args.overlap)
+    if not args.raw:
+        chunks = drop_toc_chunks(chunks, verbose=True)
     if args.header:
         chunks = with_header(chunks)
 
-    name = args.name or "__".join(filter(None, [
-        args.docs, f"{args.how}_{args.size}_{args.overlap}",
-        "header" if args.header else "",
-    ]))
+    name = args.name or "__".join(
+        filter(
+            None,
+            [
+                args.docs,
+                f"{args.how}_{args.size}_{args.overlap}",
+                "header" if args.header else "",
+            ],
+        )
+    )
     path = save_chunks(chunks, name)
 
     stats = chunk_stats(chunks)
