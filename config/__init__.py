@@ -11,6 +11,6 @@ __all__ = [
     "MAX_CONTEXT_CHARS",
     "MODEL_CONFIGS",
     "OPENAI_API_KEY",
-    "Provider",
     "ModelConfig",
+    "Provider",
 ]
