@@ -224,6 +224,7 @@ test/
 docker/
 evalsets/
 _to_delete/
+docs/
 
 # ── 팀 구조 정리 (2026-08-26) ──
 outputs/
