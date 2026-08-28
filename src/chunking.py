@@ -121,7 +121,7 @@ def _make_chunk(text, source_meta, order, section=None, add_header=False):
 # --- 방법 1. 글자 수로 자르기 --------------------------------------------
 
 
-def split_recursive(records, size=1000, overlap=150, add_header=False):
+def split_recursive(records, size=1200, overlap=200, add_header=False):
     """글자 수로 자른다. 문단 → 줄 → 문장 순으로 경계를 지킨다.
 
     강의에서 쓴 `RecursiveCharacterTextSplitter` 와 같다. 강의는 150자였는데
@@ -465,8 +465,8 @@ def main():
         help="data/processed 안의 jsonl 이름 (확장자 없이)",
     )
     parser.add_argument("--how", default="section", choices=["section", "recursive"])
-    parser.add_argument("--size", type=int, default=1000)
-    parser.add_argument("--overlap", type=int, default=150)
+    parser.add_argument("--size", type=int, default=1200)  # 실측으로 고른 값
+    parser.add_argument("--overlap", type=int, default=200)
     parser.add_argument("--name", help="저장 이름 (생략하면 설정에서 자동으로 만든다)")
     parser.add_argument(
         "--raw", action="store_true", help="목차·깨진 쪽번호를 안 지운다 (비교용)"
@@ -504,4 +504,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
