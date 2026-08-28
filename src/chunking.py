@@ -465,11 +465,6 @@ def main():
     parser.add_argument("--how", default="section", choices=["section", "recursive"])
     parser.add_argument("--size", type=int, default=1000)
     parser.add_argument("--overlap", type=int, default=150)
-    parser.add_argument(
-        "--header",
-        action="store_true",
-        help="청크 앞에 [사업명] 을 붙인다. 임베딩용이고 BM25 에는 해롭다",
-    )
     parser.add_argument("--name", help="저장 이름 (생략하면 설정에서 자동으로 만든다)")
     parser.add_argument(
         "--raw", action="store_true", help="목차·깨진 쪽번호를 안 지운다 (비교용)"
@@ -485,27 +480,25 @@ def main():
     chunks = split(documents, size=args.size, overlap=args.overlap)
     if not args.raw:
         chunks = drop_toc_chunks(chunks, verbose=True)
-    if args.header:
-        chunks = with_header(chunks)
 
-    name = args.name or "__".join(
-        filter(
-            None,
-            [
-                args.docs,
-                f"{args.how}_{args.size}_{args.overlap}",
-                "header" if args.header else "",
-            ],
-        )
-    )
-    path = save_chunks(chunks, name)
+    name = args.name or f"{args.docs}__{args.how}_{args.size}_{args.overlap}"
+
+    # 두 벌을 한 번에 낸다. 자르는 게 비싸고 머리말 붙이는 건 공짜라,
+    # 머리말 때문에 전체를 다시 자를 이유가 없다.
+    # 평범한 쪽은 BM25 가, 머리말 쪽은 임베딩 인덱스가 쓴다.
+    plain_path = save_chunks(chunks, name)
+    head_path = save_chunks(with_header(chunks), f"{name}__header")
 
     stats = chunk_stats(chunks)
     width = max(len(k) for k in stats)
     for key, value in stats.items():
         print(f"  {key:<{width}}  {value:>10,}")
-    print(f"\n청크 저장 → {path}")
-    print(f"다음:  python src/vectorstore.py --chunks {name}")
+    print(f"\n청크 저장 → {plain_path}")
+    print(f"         → {head_path}")
+    print("\n다음:")
+    print(f"  python src/vectorstore.py --chunks {name}")
+    print(f"  python src/vectorstore.py --chunks {name}__header")
+    print(f"  python scripts/compare_retrieval.py --chunks {name}")
 
 
 if __name__ == "__main__":

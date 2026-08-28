@@ -128,7 +128,7 @@ from pieces import Pipeline, Dense, Rerank    # 검색 부품. 밖에서는 쓸 
 
 ```bash
 python src/preprocessing/run.py                     → data/processed/documents.jsonl
-python src/chunking.py                              → outputs/chunks/chunks_*.jsonl
+python src/chunking.py                              → outputs/chunks/chunks_*.jsonl (평범한 것 + 머리말 붙은 것)
 python src/vectorstore.py --chunks <청크이름>        → outputs/vectorstore/<이름>/
 python src/retriever.py "질문"                       → 무엇이 뽑히는지 눈으로 확인
 python src/retriever.py --export                    → outputs/eval_results/contexts_*.jsonl
@@ -138,9 +138,10 @@ python src/retriever.py --export                    → outputs/eval_results/con
 
 ```
 python src/chunking.py --docs cleaned_documents --how recursive --size 1200
-  → outputs/chunks/chunks_cleaned_documents__recursive_1200_200.jsonl
+  → chunks_cleaned_documents__recursive_1200_200.jsonl            BM25 가 쓴다
+  → chunks_cleaned_documents__recursive_1200_200__header.jsonl    임베딩 인덱스가 쓴다
   → 다음:  python src/vectorstore.py --chunks cleaned_documents__recursive_1200_200
-  → outputs/vectorstore/cleaned_documents__recursive_1200_200__tei/
+          python src/vectorstore.py --chunks cleaned_documents__recursive_1200_200__header
 ```
 
 **전처리본 · 자르기 설정 · 임베딩이 이름 하나에 다 남는다.** A/B 를 여러 벌
