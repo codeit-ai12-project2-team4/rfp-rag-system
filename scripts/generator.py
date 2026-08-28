@@ -1,3 +1,42 @@
+"""
+[Q&A Eval Generator Usage Guide]
+
+1. 역할:
+   - 전처리된 RFP 본문(JSONL)을 청크 단위로 분할하여 Qwen 모델을 통해 골든 Q&A 쌍을 대량 생성.
+
+2. 외부 실행 예시 (노트북/다른 스크립트):
+   --------------------------------------------------------------------------------
+   import sys
+   from pathlib import Path
+
+   PROJECT_ROOT = Path(__file__).resolve().parent.parent  # 또는 루트 경로 지정
+   if str(PROJECT_ROOT) not in sys.path:
+       sys.path.insert(0, str(PROJECT_ROOT))
+
+   from generate_eval_set.generator import QAEvalGenerator, load_documents, save_jsonl
+
+   # 1. 파일 경로 정의
+   INPUT_PATH = PROJECT_ROOT / "Pipeline_Output" / "Pipeline_v2" / "cleaned_documents.jsonl"
+   RAW_OUTPUT_PATH = PROJECT_ROOT / "Eval_Set" / "eval_set.jsonl"
+
+   # 2. 문서 로드 및 모델 초기화 (GPU 메모리 점유)
+   docs = load_documents(INPUT_PATH)
+   generator = QAEvalGenerator(model_id="Qwen/Qwen2.5-3B-Instruct", device="cuda:0")
+
+   # 3. 데이터셋 생성 (청크당 3문항, 문서당 최대 2개 청크 처리)
+   raw_qa_dataset = generator.generate_from_documents(
+       documents=docs,
+       n_questions_per_chunk=3,
+       chunk_size=2500,
+       max_chunks_per_doc=2
+   )
+
+   # 4. 원본 전체 저장
+   save_jsonl(raw_qa_dataset, RAW_OUTPUT_PATH)
+   print(f"생성 완료: {len(raw_qa_dataset)}개")
+   --------------------------------------------------------------------------------
+"""
+
 import json
 import logging
 import re

@@ -1,3 +1,48 @@
+"""
+[Q&A Sampler & Benchmark Builder Usage Guide]
+
+1. 역할:
+   - 이미 생성된 Q&A 원본(JSONL)을 불러와 결함 검사(루프, 빈 근거, 환각 등)를 수행하고
+     4대 벤치마크 카테고리(배점 15, 요구사항 15, 의역 40, 없음 10 = 총 80개)로 정밀 샘플링.
+   - LLM 로드가 불필요하여 수 초 내로 실행 가능.
+
+2. 외부 실행 예시 (노트북/다른 스크립트):
+   --------------------------------------------------------------------------------
+   import sys
+   from pathlib import Path
+
+   PROJECT_ROOT = Path(__file__).resolve().parent.parent  # 또는 루트 경로 지정
+   if str(PROJECT_ROOT) not in sys.path:
+       sys.path.insert(0, str(PROJECT_ROOT))
+
+   from generate_eval_set.generator import load_documents, save_jsonl
+   from generate_eval_set.sampler import sample_benchmark_dataset, sample_balanced_items
+
+   # 1. 파일 경로 설정
+   RAW_PATH = PROJECT_ROOT / "Eval_Set" / "eval_set.jsonl"
+   CLEAN_n_PATH = PROJECT_ROOT / "Eval_Set" / "eval_set_n.jsonl"
+   DEFECT_PATH = PROJECT_ROOT / "Eval_Set" / "defect_items.jsonl"
+   EVAL_n_PATH = PROJECT_ROOT / "Eval_Set" / "eval_set_n.jsonl"
+
+   # 2. 원본 데이터 로드
+   raw_items = load_documents(RAW_PATH)
+
+   # [사용법 A] n개 벤치마크셋 추출 (품질 필터링 + 4대 유형별 쿼터 적용)
+   eval_n, defect_items = sample_benchmark_dataset(
+       items=raw_items,
+       quotas={"배점": 15, "요구사항": 15, "의역": 40, "없음": 10},
+       filter_defects=True,
+       seed=42
+   )
+   save_jsonl(eval_n, CLEAN_n_PATH)
+   save_jsonl(defect_items, DEFECT_PATH)
+
+   # [사용법 B] 단순 문서별 균등 샘플링 (예: n개 생성기 테스트용)
+   eval_n = sample_balanced_items(raw_items, target_count=30, seed=42)
+   save_jsonl(eval_n, EVAL_n_PATH)
+   --------------------------------------------------------------------------------
+"""
+
 import logging
 import random
 import re
