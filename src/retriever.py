@@ -82,7 +82,8 @@ from vectorstore import load_store
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
 CHUNKS = "cleaned_documents__recursive_1200_200"
 INDEX = f"{CHUNKS}__header__tei"
-POOL = 30  # 리랭커에 넘길 후보 수
+POOL = 30  # 리랭커에 넘길 후보 수. 10/30/60/100 을 재고 고른 값이다 —
+#          10 은 부족하고(배점 0.850), 60·100 은 30 과 ±1문항 차이인데 시간만 2~3배다.
 TOP_K = 8  # 리랭커가 남길 수. 예산에서 다시 잘리므로 넉넉히 준다
 
 
@@ -347,7 +348,7 @@ def preview(text, query, width=220):
         if at >= 0:
             start = max(0, at - width // 3)
             head = "…" if start else ""
-            return head + flat[start:start + width]
+            return head + flat[start : start + width]
     return flat[:width]
 
 
@@ -381,18 +382,24 @@ def export_contexts(evalset, out_path, **kwargs):
             doc_ids = [pair["doc_id"]] if pair.get("doc_id") else None
             chunks = fit_context(retrieve(pair["question"], doc_ids=doc_ids, **kwargs))
             context = format_context(chunks)
-            f.write(json.dumps({
-                "qid": f"{pair.get('type', 'q')}-{i:03d}",
-                "question": pair["question"],
-                "type": pair.get("type"),
-                "answerable": pair.get("answerable", True),
-                "doc_ids": doc_ids,
-                "keywords": pair.get("keywords"),   # 검색 정답. 채점 참고용
-                "context": context,
-                "sources": sources(chunks),
-                "chunks": len(chunks),
-                "chars": len(context),
-            }, ensure_ascii=False) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "qid": f"{pair.get('type', 'q')}-{i:03d}",
+                        "question": pair["question"],
+                        "type": pair.get("type"),
+                        "answerable": pair.get("answerable", True),
+                        "doc_ids": doc_ids,
+                        "keywords": pair.get("keywords"),  # 검색 정답. 채점 참고용
+                        "context": context,
+                        "sources": sources(chunks),
+                        "chunks": len(chunks),
+                        "chars": len(context),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
             print(f"  {i}/{len(pairs)}", end="\r")
 
     print(" " * 30, end="\r")
@@ -438,8 +445,14 @@ def main():
 
     if args.export:
         out = args.out or settings.EVAL_RESULTS / f"contexts_{args.evalset}.jsonl"
-        export_contexts(args.evalset, out, top_k=args.top_k, index=args.index,
-                        embed=args.embed, rerank=args.rerank)
+        export_contexts(
+            args.evalset,
+            out,
+            top_k=args.top_k,
+            index=args.index,
+            embed=args.embed,
+            rerank=args.rerank,
+        )
         return
 
     if not args.query:
