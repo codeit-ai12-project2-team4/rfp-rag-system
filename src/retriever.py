@@ -39,30 +39,39 @@ generation 파트에 넘길 때는 파일로 뽑는다. 그쪽은 TEI 도 인덱
     python src/retriever.py "이 사업의 예산이 얼마야?"
     python src/retriever.py --notices "클라우드 전환" --min-budget 300000000
 
-## 왜 이 설정인가 (2026-08-26 실측)
+## 왜 이 설정인가 (2026-08-28 실측)
 
-`data/eval_qa.json` 133문항(요구사항·배점·의역·없음)으로 일곱 조합을 쟀다.
+팀원이 만든 `data/eval_qa_80.json` 으로 여덟 조합을 쟀다. MRR 이다.
+공고를 한정한 경우(scoped)가 실제 UI 2단계 조건이다.
 
-    설정                    배점    요구사항   의역
-    BM25                   0.050  0.500  0.550
-    Dense                  0.150  0.725  0.550
-    Dense+머리말             0.575  0.925  0.475
-    Dense+머리말+Rerank      0.950  0.975  0.600   ← 전 유형 1위
-    Hybrid                 0.100  0.775  0.550
-    Hybrid+Rerank          0.400  0.675  0.575
+    설정                       배점   요구사항   의역
+    BM25                     0.611  0.704  0.618
+    Dense                    0.608  0.648  0.586
+    Dense+머리말               0.633  0.694  0.624
+    Dense+머리말+Rerank        0.667  0.722  0.679
+    Hybrid                   0.621  0.711  0.632
+    Hybrid+Rerank            0.867  0.778  0.712   ← 전 유형 1위
+    Hybrid+머리말              0.686  0.705  0.650
 
-- **머리말(`[사업명]`)을 붙인 인덱스**를 쓴다. 안 붙이면 배점이 0.150 으로 떨어진다.
-  공고를 하나로 좁혀서(`doc_ids`) 재도 이 차이가 그대로라, 단순히 "그 공고로
-  몰아주는" 효과가 아니다.
-- **BM25 를 섞지 않는다.** RRF 는 순위 융합이라, 배점에서 0.050 밖에 못 찾는 BM25 가
-  엉뚱한 청크를 올리면 Dense 의 좋은 1등이 밀린다 (Hybrid+머리말 0.275 < Dense+머리말 0.575).
-- **리랭커가 승패를 가른다.** 배점 0.575 → 0.950. 다만 3배 느리다(0.42초 → 1.2초/질문).
-- 자르기는 `recursive/1200/200`. 3000/400 은 쉬운 질문 세트로 골랐던 값이고,
-  어려운 세트에서는 1200 이 이긴다 (의역 0.475 → 0.600).
+- **BM25 를 섞는다.** RFP 는 글자의 60~80%가 표 안에 있고, 표가 많은 문서에서는
+  어휘 매칭이 강하다는 게 문헌과도 맞는다. 단독으로도 Dense 를 이긴다.
+- **머리말(`[사업명]`)은 안 쓴다.** BM25 와 섞을 때는 머리말 없는 인덱스가 낫다.
+  예전에 머리말이 결정적으로 보였던 건 그때 평가 질문이 100% 「사업명」으로
+  시작했기 때문이다. 팀원 세트는 13% 뿐이고 실사용도 그쪽에 가깝다.
+- **리랭커가 승패를 가른다.** 배점 0.621 → 0.867. 3배 느리다.
+- 공고를 한정하지 않으면 요구사항만 Dense+머리말+Rerank 가 낫다(0.722 vs 0.648).
+  BM25 가 `SFR` 같은 공용 어휘로 엉뚱한 공고를 끌어오기 때문이다. 2단계는
+  이미 공고가 정해져 있으니 문제되지 않는다.
+- 자르기는 `recursive/1200/200`, 전처리본은 마크다운 표 문법을 걷어낸 것.
+
+**남은 문제** — 의역 40문항 중 못 찾는 14개는 순위 문제가 아니다. 후보밖 8개
+(정답 청크가 후보 30개에 못 듦), 정답없음 6개(청크 경계가 정답을 자름).
+순위밀림은 0개다. parent-child 청킹이 다음 후보다.
 """
 
 import argparse
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -73,39 +82,63 @@ for _folder in (_ROOT / "src", _ROOT):
     if str(_folder) not in sys.path:
         sys.path.insert(0, str(_folder))
 
+import chunking
 from config import settings
 from evaluation import fit_budget
 from models import load_embedder, load_reranker
-from pieces import Dense, Pipeline, Rerank
+from pieces import BM25, Dense, Hybrid, Pipeline, Rerank
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
-CHUNKS = "cleaned_documents__recursive_1200_200"
-INDEX = f"{CHUNKS}__header__tei"
+CHUNKS = "cleaned_documents_strip__recursive_1200_200"
+INDEX = f"{CHUNKS}__tei"  # 머리말 없는 쪽. BM25 와 섞을 때는 이게 낫다
 POOL = 30  # 리랭커에 넘길 후보 수. 10/30/60/100 을 재고 고른 값이다 —
 #          10 은 부족하고(배점 0.850), 60·100 은 30 과 ±1문항 차이인데 시간만 2~3배다.
 TOP_K = 8  # 리랭커가 남길 수. 예산에서 다시 잘리므로 넉넉히 준다
 
 
-@lru_cache(maxsize=4)
-def _load(index, embed, rerank):
-    """인덱스와 리랭커를 한 번만 올린다.
+@lru_cache(maxsize=2)
+def _store(index, embed):
+    """FAISS 인덱스만 연다. 공고 찾기(1단계)는 이것만 있으면 된다."""
+    return load_store(index, load_embedder(embed))
 
-    질문마다 다시 올리면 FAISS 를 매번 디스크에서 읽는다. 캐시가 이걸 막는다.
+
+@lru_cache(maxsize=2)
+def _load(index, chunks, embed, rerank):
+    """인덱스·청크·리랭커를 한 번만 올린다.
+
+    질문마다 다시 올리면 FAISS 를 매번 디스크에서 읽고 BM25 를 다시 짓는다.
+    **BM25 가 비싸다** — 청크 9,500개를 형태소 분석해야 해서 수십 초 걸리고
+    메모리도 수백 MB 다. 그래서 첫 호출만 느리고 그 뒤로는 캐시가 받는다.
+    서비스에서는 뜰 때 한 번 불러 두는 게 낫다.
 
     Args:
-        index: 인덱스 이름.
+        index: FAISS 인덱스 이름.
+        chunks: BM25 가 쓸 청크 이름 (머리말 없는 쪽).
         embed: 임베딩 종류 (tei / local / fake).
         rerank: 리랭커 종류 (tei / local / fake).
 
     Returns:
-        `(FAISS 인덱스, 리랭커)`.
+        `(FAISS 인덱스, 청크 리스트, 리랭커)`.
     """
-    return load_store(index, load_embedder(embed)), load_reranker(rerank)
+    started = time.time()
+    store = _store(index, embed)
+    chunk_list = chunking.load_chunks(chunks)
+    BM25(chunk_list, k=POOL)  # 여기서 색인을 지어 캐시에 넣는다
+    reranker = load_reranker(rerank)
+    print(f"검색기 준비 {time.time() - started:.1f}초 (청크 {len(chunk_list):,}개)")
+    return store, chunk_list, reranker
 
 
 def retrieve(
-    query, doc_ids=None, top_k=TOP_K, pool=POOL, index=INDEX, embed="tei", rerank="tei"
+    query,
+    doc_ids=None,
+    top_k=TOP_K,
+    pool=POOL,
+    index=INDEX,
+    chunks=CHUNKS,
+    embed="tei",
+    rerank="tei",
 ):
     """질문에 맞는 청크를 찾는다.
 
@@ -114,16 +147,25 @@ def retrieve(
         doc_ids: 주면 그 공고들 안에서만 찾는다. 요약 카드를 만들 때 쓴다.
         top_k: 리랭커가 남길 청크 수.
         pool: 리랭커에 넘길 후보 수. 크면 정확하고 느리다.
-        index: 인덱스 이름. 기본값은 머리말이 붙은 것이다.
+        index: FAISS 인덱스 이름.
+        chunks: BM25 가 쓸 청크 이름.
         embed: 임베딩 종류.
         rerank: 리랭커 종류.
 
     Returns:
         점수 순 Document 리스트. `metadata` 에 doc_id·title·agency·chunk_id 가 있다.
     """
-    store, reranker = _load(index, embed, rerank)
+    store, chunk_list, reranker = _load(index, chunks, embed, rerank)
+    # BM25 는 같은 청크 묶음이면 색인을 돌려쓴다. 그래서 질문마다 만들어도 싸다.
     pipeline = Pipeline([
-        Dense(store, k=pool, doc_ids=doc_ids),
+        Hybrid(
+            [
+                Dense(store, k=pool, doc_ids=doc_ids),
+                BM25(chunk_list, k=pool, doc_ids=doc_ids),
+            ],
+            k=pool,
+            pool=pool,
+        ),
         Rerank(reranker, k=top_k),
     ])
     return pipeline(query).chunks
@@ -238,7 +280,7 @@ def search_notices(
         점수 순 공고 리스트.
         `[{doc_id, title, agency, budget, bid_close_at, summary, score, 청크수, excerpt}]`
     """
-    store, _ = _load(index, embed, "fake")  # 리랭커는 안 쓴다
+    store = _store(index, embed)  # BM25 도 리랭커도 안 쓴다
     hits = Dense(store, k=pool).search(query, pool)
 
     found = {}
@@ -439,6 +481,7 @@ def main():
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--index", default=INDEX)
+    parser.add_argument("--chunks", default=CHUNKS, help="BM25 가 쓸 청크 이름")
     parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
     parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
     args = parser.parse_args()
@@ -450,6 +493,7 @@ def main():
             out,
             top_k=args.top_k,
             index=args.index,
+            chunks=args.chunks,
             embed=args.embed,
             rerank=args.rerank,
         )
@@ -487,6 +531,7 @@ def main():
         doc_ids=args.doc_ids,
         top_k=args.top_k,
         index=args.index,
+        chunks=args.chunks,
         embed=args.embed,
         rerank=args.rerank,
     )
