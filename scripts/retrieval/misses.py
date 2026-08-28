@@ -70,6 +70,13 @@ def main():
     if args.type != "all":
         pairs = [p for p in pairs if p.get("type") == args.type]
 
+    # 정답이 안 붙은 문항은 뺀다. 넣어두면 무조건 오답이 되어 "정답없음" 을
+    # 부풀린다. `compare_retrieval.py` 도 같은 기준으로 거른다.
+    blank = [p for p in pairs if not p.get("keywords")]
+    pairs = [p for p in pairs if p.get("keywords")]
+    if blank:
+        print(f"정답이 안 붙은 {len(blank)}문항은 뺍니다 (채점 불가)")
+
     store = load_store(index, load_embedder(args.embed))
     pipeline = Pipeline([
         Dense(store, k=args.pool),

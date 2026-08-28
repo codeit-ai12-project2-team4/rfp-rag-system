@@ -570,7 +570,7 @@ def main():
     print("\n다음:")
     print(f"  python src/vectorstore.py --chunks {name}")
     print(f"  python src/vectorstore.py --chunks {name}__header")
-    print(f"  python scripts/compare_retrieval.py --chunks {name}")
+    print(f"  python scripts/retrieval/compare_retrieval.py --chunks {name}")
 
 
 if __name__ == "__main__":

@@ -116,3 +116,4 @@ class Widen:
 
     def __repr__(self):
         return f"Widen(앞{self.before} 뒤{self.after})"
+
