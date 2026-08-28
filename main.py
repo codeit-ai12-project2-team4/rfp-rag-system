@@ -1,18 +1,18 @@
 """
-실행 예시 파일
+실행 파일
 
 python main.py 로 실행하면, config/model_config.py에 등록된 모델 목록을
 보여주고 사용자가 직접 번호로 선택할 수 있습니다.
 """
 
 from config import MODEL_CONFIGS
-from src.generation import generate_answer
+from src.pipeline import GenerationPipeline
 
 
 def choose_model() -> str:
-    """등록된 모델 목록을 보여주고 사용자에게 번호로 하나를 선택하게 한다.
+    """등록된 모델 목록을 보여주고 사용자에게 번호로 하나를 선택하게 합니다.
 
-    잘못된 입력이면 첫 번째 모델을 기본값으로 사용한다.
+    잘못된 입력이면 첫 번째 모델을 기본값으로 사용합니다.
 
     Returns:
         선택된 model_key.
@@ -41,17 +41,15 @@ def choose_model() -> str:
 if __name__ == "__main__":
     model_key = choose_model()
 
-    sample_context = (
-        "본 사업은 국민연금공단이 발주한 이러닝시스템 고도화 사업으로, "
-        "예산은 3억원이며 사업 기간은 6개월이다."
-    )
     sample_query = "이 사업의 예산이 얼마야?"
 
-    result = generate_answer(
-        model_key=model_key,
-        query=sample_query,
-        context=sample_context,
-    )
+    pipeline = GenerationPipeline(model_key=model_key)
+    pipeline_result = pipeline(sample_query)
+    result = pipeline_result.result
+
+    print("\n[검색된 컨텍스트]")
+    preview = pipeline_result.context[:300]
+    print(preview + ("..." if len(pipeline_result.context) > 300 else ""))
 
     if not result["ok"]:
         print("\n[오류]")

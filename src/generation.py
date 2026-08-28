@@ -11,6 +11,7 @@ import os
 import sys
 import time
 
+# 프로젝트 루트 (config를 찾기 위함)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import MAX_CONTEXT_CHARS, MODEL_CONFIGS, OPENAI_API_KEY, ModelConfig
@@ -79,7 +80,9 @@ def _build_messages(
     return messages
 
 
-def _run_openai(cfg: ModelConfig, messages: list[dict]) -> tuple[str, dict | None]:
+def _run_openai(
+    cfg: ModelConfig, messages: list[dict], max_tokens: int | None = None
+) -> tuple[str, dict | None]:
     """OpenAI Chat Completions API로 실제 호출을 수행한다 (시나리오 B).
 
     reasoning_effort/verbosity 등 이 모델이 지원하지 않는 파라미터가 있으면
@@ -88,6 +91,8 @@ def _run_openai(cfg: ModelConfig, messages: list[dict]) -> tuple[str, dict | Non
     Args:
         cfg: 사용할 모델의 ModelConfig.
         messages: _build_messages()로 만든 메시지 배열.
+        max_tokens: 생성할 최대 토큰 수. 생략하면 1000 (일반 답변 생성용 기본값).
+            judge_faithfulness()처럼 YES/NO 한 단어만 필요할 때는 짧게 넘긴다.
 
     Returns:
         (answer, usage) 튜플. usage는 {"input_tokens": int, "output_tokens": int} 또는 None.
@@ -104,7 +109,7 @@ def _run_openai(cfg: ModelConfig, messages: list[dict]) -> tuple[str, dict | Non
     params = {
         "model": cfg.model,
         "messages": messages,
-        "max_completion_tokens": 1000,
+        "max_completion_tokens": max_tokens or 1000,
         "reasoning_effort": cfg.reasoning_effort,
         "verbosity": cfg.verbosity,
     }
@@ -167,12 +172,15 @@ def _get_hf_pipeline(cfg: ModelConfig):
     return _hf_pipeline_cache[cfg.model]
 
 
-def _run_huggingface(cfg: ModelConfig, messages: list[dict]) -> tuple[str, dict | None]:
+def _run_huggingface(
+    cfg: ModelConfig, messages: list[dict], max_tokens: int | None = None
+) -> tuple[str, dict | None]:
     """HuggingFace 로컬 모델로 실제 호출을 수행한다 (시나리오 A).
 
     Args:
         cfg: 사용할 모델의 ModelConfig.
         messages: _build_messages()로 만든 메시지 배열.
+        max_tokens: 생성할 최대 토큰 수. 생략하면 cfg.max_new_tokens(기본 512)를 쓴다.
 
     Returns:
         (answer, usage) 튜플. 로컬 모델은 토큰 사용량 계측이 없으면 usage=None.
@@ -183,7 +191,7 @@ def _run_huggingface(cfg: ModelConfig, messages: list[dict]) -> tuple[str, dict 
     )
     outputs = pipe(
         prompt,
-        max_new_tokens=getattr(cfg, "max_new_tokens", 512),
+        max_new_tokens=max_tokens or getattr(cfg, "max_new_tokens", 512),
         do_sample=False,
         **getattr(cfg, "extra", {}),
     )
@@ -293,3 +301,75 @@ def run_comparison(
         generate_answer(model_key=key, query=query, context=context, history=history)
         for key in model_keys
     ]
+
+
+# --- 평가(evaluation) 연동용 어댑터 ---------------------------------------
+#
+# src/evaluation/generation.py의 judge_faithfulness()는
+# judge_llm.ask(system, user, max_tokens) 메서드를 가진 객체를 전제로 만들어져
+# 있다. generate_answer()는 이 형태와 다르므로(딕셔너리 반환, model_key 방식),
+# 아래 ask()/AskableModel이 그 차이를 메운다.
+#
+# evaluate_answers()가 기대하는 다른 하나 — pipeline(question)을 호출하면
+# .answer / .context 속성을 가진 결과가 나오는 것 — 은 검색(retriever.py)까지
+# 엮어야 하므로 이 파일이 아니라 src/pipeline.py의 GenerationPipeline이 맡는다.
+
+
+def ask(model_key: str, system: str, user: str, max_tokens: int = 10) -> str:
+    """RFP 질의응답 전용 프롬프트 없이, 시스템/사용자 메시지를 그대로 LLM에 넘긴다.
+
+    generate_answer()는 SYSTEM_PROMPT와 "[컨텍스트]/[질문]" 형식을 강제로 씌우기
+    때문에, judge_faithfulness()처럼 임의의 시스템 프롬프트로 채점만 시키는 범용
+    LLM 호출에는 쓸 수 없다. 이 함수는 그 틀 없이 순수하게 system/user만 넘긴다.
+
+    generate_answer()와 마찬가지로 예외를 던지지 않는다: 실패하면 빈 문자열을
+    반환한다.
+
+    Args:
+        model_key: config.MODEL_CONFIGS에 등록된 키 (예: "nano").
+        system: 시스템 프롬프트.
+        user: 사용자 메시지.
+        max_tokens: 생성할 최대 토큰 수. 기본값 10은 YES/NO 같은 짧은 채점용.
+
+    Returns:
+        모델이 생성한 텍스트. model_key가 잘못됐거나 호출이 실패하면 빈 문자열.
+    """
+    if model_key not in MODEL_CONFIGS:
+        return ""
+    cfg = MODEL_CONFIGS[model_key]
+    runner = _PROVIDER_RUNNERS.get(cfg.provider)
+    if runner is None:
+        return ""
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    try:
+        answer, _usage = runner(cfg, messages, max_tokens=max_tokens)
+    except Exception:  # noqa: BLE001 - 채점 실패로 평가 전체가 죽으면 안 됨
+        return ""
+    return answer or ""
+
+
+class AskableModel:
+    """judge_faithfulness()가 기대하는 `.ask(system, user, max_tokens)` 형태로
+    generate_answer() 쪽 모델을 감싼 얇은 어댑터.
+
+    Example:
+        from evaluation import evaluate_answers
+        from generation import AskableModel
+        from pipeline import GenerationPipeline
+
+        judge = AskableModel("nano")  # 채점은 싼 모델로 충분
+        evaluate_answers(GenerationPipeline("mini"), pairs, judge_llm=judge)
+    """
+
+    def __init__(self, model_key: str = "nano"):
+        self.model_key = model_key
+        self.name = model_key  # models/llm.py 쪽 LLM 객체들과 인터페이스를 맞춤
+
+    def ask(self, system: str, user: str, max_tokens: int = 10) -> str:
+        return ask(self.model_key, system, user, max_tokens=max_tokens)
+
+    def __repr__(self) -> str:
+        return f"AskableModel({self.model_key!r})"

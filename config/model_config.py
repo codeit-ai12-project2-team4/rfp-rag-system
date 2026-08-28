@@ -51,13 +51,25 @@ MODEL_CONFIGS = {
         reasoning_effort="low",
         verbosity="low",
     ),
-    # 시나리오 A 모델을 정하면 아래처럼 주석을 풀고 채우면 됩니댱.
-    # 예시:
-    # "llama-gcp": ModelConfig(
-    #     provider="huggingface",
-    #     model=" ",
-    #     dtype="bfloat16",
-    #     device_map="auto",
-    #     max_new_tokens=512,
-    # ),
+    "qwen": ModelConfig(
+        provider="huggingface",
+        model="Qwen/Qwen2.5-3B-Instruct",
+        dtype="bfloat16",
+        device_map="auto",
+        max_new_tokens=512,
+    ),
+    "exaone": ModelConfig(
+        provider="huggingface",
+        model="LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct",
+        dtype="bfloat16",
+        device_map="auto",
+        max_new_tokens=512,
+    ),
+    "kanana": ModelConfig(
+        provider="huggingface",
+        model="kakaocorp/kanana-nano-2.1b-instruct",
+        dtype="bfloat16",
+        device_map="auto",
+        max_new_tokens=512,
+    ),
 }

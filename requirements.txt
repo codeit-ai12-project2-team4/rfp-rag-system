@@ -129,3 +129,35 @@ websockets==17.0.1
 xxhash==4.0.1
 yarl==1.24.5
 zstandard==0.25.0
+
+
+### 상기되지 않은 항목들 추가
+
+# --- 문서에서 글자 뽑기 ---
+# 기존에 있음 #olefile>=0.47            # HWP 파일 열기 (pyhwp 는 최신 파이썬에서 설치가 깨져 안 씀)
+pdfplumber>=0.11         # PDF 에서 표까지 뽑기
+
+# --- 데이터 다루기 ---
+pyyaml>=6.0
+
+# --- RAG ---
+langchain-core>=0.3          # Document 같은 기본 자료형
+langchain-community>=0.3     # FAISS 연결
+langchain-text-splitters>=0.3
+faiss-cpu>=1.9               # 벡터 검색. 청크 수천 개면 CPU 로 충분하다
+rank-bm25>=0.2.2             # 키워드 검색
+kiwipiepy>=0.20              # 한국어 형태소 분석 (BM25 정확도에 중요)
+
+# --- 서버에 붙기 ---
+requests>=2.32               # TEI 호출
+
+# --- 생성 (시나리오 A, HuggingFace 로컬 모델) ---
+torch>=2.4                   # HuggingFace 모델 구동
+transformers>=4.45           # pipeline("text-generation")
+accelerate>=0.34             # device_map="auto"
+bitsandbytes>=0.43           # 8bit/4bit 양자화 (선택이지만 있으면 VRAM 절약)
+
+# --- 노트북 ---
+# jupyter>=1.1
+# ipykernel>=6.29
+# matplotlib>=3.9
