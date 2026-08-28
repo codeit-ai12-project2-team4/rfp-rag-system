@@ -86,7 +86,7 @@ import chunking
 from config import settings
 from evaluation import fit_budget
 from models import load_embedder, load_reranker
-from pieces import BM25, Dense, Hybrid, Pipeline, Rerank
+from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
@@ -255,6 +255,8 @@ def search_notices(
     closes_after=None,
     index=INDEX,
     embed="tei",
+    chunks=None,
+    rerank=None,
 ):
     """자연어로 공고를 찾는다. **1단계 — 어떤 공고를 볼지 고르는 화면.**
 
@@ -262,8 +264,10 @@ def search_notices(
     상위에 들면 그만큼 점수가 올라간다(RRF). 예산·기관·마감일 같은 조건은
     임베딩이 아니라 **메타데이터로 거른다** — 숫자 비교를 벡터에 맡기면 틀린다.
 
-    리랭커는 안 쓴다. 후보가 200개라 느리고, 공고 점수는 여러 청크의 합이라
-    한 청크를 다시 채점해도 순위가 크게 안 바뀐다.
+    `chunks` 와 `rerank` 는 기본이 꺼져 있다. 켜면 2단계와 같은 부품이 붙는다 —
+    `chunks` 를 주면 BM25 를 섞고, `rerank` 를 주면 묶기 전에 다시 채점한다.
+    둘 다 후보가 200개라 느리다. 값어치가 있는지는
+    `scripts/eval_notices.py` 로 잰다.
 
     Args:
         query: 자연어 질의. "클라우드 전환", "장애인 접근성 개선" 같은 것.
@@ -275,13 +279,24 @@ def search_notices(
         closes_after: 이 날짜 이후 마감 (`"2024-04-01"`).
         index: 인덱스 이름.
         embed: 임베딩 종류.
+        chunks: 청크 이름. 주면 BM25 를 섞는다.
+        rerank: 리랭커 종류 (tei / local). 주면 묶기 전에 다시 채점한다.
 
     Returns:
         점수 순 공고 리스트.
         `[{doc_id, title, agency, budget, bid_close_at, summary, score, 청크수, excerpt}]`
     """
-    store = _store(index, embed)  # BM25 도 리랭커도 안 쓴다
-    hits = Dense(store, k=pool).search(query, pool)
+    store = _store(index, embed)
+    searcher = Dense(store, k=pool)
+    if chunks:
+        searcher = Hybrid(
+            [searcher, BM25(chunking.load_chunks(chunks), k=pool)], k=pool, pool=pool
+        )
+    hits = searcher.search(query, pool)
+    if rerank:
+        hits = Rerank(load_reranker(rerank), k=pool)(
+            State(question=query, chunks=hits)
+        ).chunks
 
     found = {}
     for rank, chunk in enumerate(hits, 1):
