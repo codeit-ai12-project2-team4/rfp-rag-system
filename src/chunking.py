@@ -324,7 +324,7 @@ def leader_count(text):
 
 
 def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
-    """목차 **줄**을 지운다. 목차만 남는 청크는 버린다.
+    r"""목차 **줄**을 지운다. 목차만 남는 청크는 버린다.
 
     목차에는 문서의 모든 절 제목이 한자리에 모여 있어서 **어떤 질문에도 조금씩
     걸린다.** 실제로 "그럼 참가자격은?" 을 던졌더니 목차 청크가 1위로 올라왔다 —
@@ -367,8 +367,10 @@ def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
         trimmed += 1
         kept.append(chunk)
     if verbose:
-        print(f"목차 줄 정리: {trimmed}개 청크에서 목차만 걷어냄 · "
-              f"{dropped}개는 목차뿐이라 버림")
+        print(
+            f"목차 줄 정리: {trimmed}개 청크에서 목차만 걷어냄 · "
+            f"{dropped}개는 목차뿐이라 버림"
+        )
     return kept
 
 
