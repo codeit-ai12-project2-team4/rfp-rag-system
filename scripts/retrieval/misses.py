@@ -50,8 +50,12 @@ def main():
     parser.add_argument("--chunks", required=True, help="청크 이름 (__header 없이)")
     parser.add_argument("--type", default="의역", help="질문 유형. all 이면 전부")
     parser.add_argument("--evalset", default="eval_qa")
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
-    parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
+    parser.add_argument(
+        "--rerank", default="tei", choices=["tei", "local", "cohere", "fake"]
+    )
     parser.add_argument("--pool", type=int, default=30)
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--budget", type=int, default=settings.MAX_CONTEXT_CHARS)

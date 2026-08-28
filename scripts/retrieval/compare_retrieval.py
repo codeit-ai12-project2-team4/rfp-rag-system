@@ -40,7 +40,7 @@ import chunking
 import evaluation as ev
 from config import settings
 from models import load_embedder, load_reranker
-from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, Widen
+from pieces import BM25, AddKeywords, Dense, Hybrid, Pipeline, Rerank, Widen
 from preprocessing import load_documents
 from vectorstore import list_stores, load_store
 
@@ -109,6 +109,24 @@ def build_setups(args):
         reranker = load_reranker(args.rerank, **kwargs)
         rr = Pipeline([hybrid, Rerank(reranker, k=args.pool)])
         setups["Hybrid+Rerank"] = lambda q: rr(q).chunks
+        # BM25:Dense 비중. RRF 는 순위 융합이라 가중치가 결과를 바꾼다.
+        # 지금까지 50:50 고정이었고 한 번도 안 쟀다. 재인덱싱이 필요 없다.
+        for weight in args.bm25_weights:
+            if abs(weight - 0.5) < 1e-6:
+                continue  # 기본값은 위 Hybrid+Rerank 와 같다
+            mixed = Hybrid(
+                [dense, bm25], weights=[1 - weight, weight], k=args.pool, pool=args.pool
+            )
+            pipe = Pipeline([mixed, Rerank(reranker, k=args.pool)])
+            setups[f"Hybrid(BM25 {weight:.1f})+Rerank"] = (
+                lambda p: lambda q: p(q).chunks
+            )(pipe)
+
+        # 질의에 공문 용어를 덧붙인다. LLM 없이 사전만 쓴다.
+        # 의역 유형("돈이 얼마나 드나" → "사업예산")을 겨냥한 것이다.
+        keyword_pipe = Pipeline([AddKeywords(), hybrid, Rerank(reranker, k=args.pool)])
+        setups["용어추가+Hybrid+Rerank"] = lambda q: keyword_pipe(q).chunks
+
         if head_dense is not None:
             head_rr = Pipeline([head_dense, Rerank(reranker, k=args.pool)])
             setups["Dense+머리말+Rerank"] = lambda q: head_rr(q).chunks
@@ -196,14 +214,24 @@ def main():
                         help="질문을 즉석에서 뽑을 전처리본 (--evalset 없을 때만)")
     parser.add_argument("--evalset", default="eval_qa",
                         help="data/ 의 평가 세트 이름. 없으면 --docs 에서 즉석 생성")
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
-    parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
+    parser.add_argument(
+        "--rerank", default="tei", choices=["tei", "local", "cohere", "fake"]
+    )
     parser.add_argument(
         "--rerank-model",
         help="--rerank local 일 때 쓸 HuggingFace 모델. TEI 가 못 받는 걸 재볼 때.",
     )
     parser.add_argument(
         "--trust-remote-code", action="store_true", help="jina 처럼 커스텀 구조일 때"
+    )
+    parser.add_argument(
+        "--bm25-weights",
+        default="0.3,0.5,0.7",
+        type=lambda s: [float(x) for x in s.split(",")],
+        help="Hybrid 의 BM25 비중들. 쉼표로 구분",
     )
     parser.add_argument("--no-rerank", action="store_true", help="리랭커를 빼고 잰다")
     parser.add_argument("--pool", type=int, default=30,

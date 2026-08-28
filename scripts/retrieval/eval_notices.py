@@ -76,7 +76,9 @@ def main():
     parser.add_argument("--evalset", default="eval_qa_80")
     parser.add_argument("--pool", type=int, default=100, help="훑어볼 청크 수")
     parser.add_argument("--top-n", type=int, default=10)
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
     parser.add_argument("--rerank", default="tei", choices=["tei", "local"])
     parser.add_argument("--no-rerank", action="store_true", help="리랭커 설정을 뺀다")
     parser.add_argument("--out", default=str(settings.EVAL_RESULTS / "notices.csv"))
