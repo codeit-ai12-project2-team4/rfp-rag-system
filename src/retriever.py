@@ -90,7 +90,7 @@ from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
-CHUNKS = "cleaned_documents_strip__recursive_1200_200"
+CHUNKS = "cleaned_documents_v3__recursive_1200_200"
 INDEX = f"{CHUNKS}__tei"  # 머리말 없는 쪽. BM25 와 섞을 때는 이게 낫다
 POOL = 30  # 리랭커에 넘길 후보 수. 10/30/60/100 을 재고 고른 값이다 —
 #          10 은 부족하고(배점 0.850), 60·100 은 30 과 ±1문항 차이인데 시간만 2~3배다.
