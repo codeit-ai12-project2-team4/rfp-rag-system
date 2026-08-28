@@ -100,7 +100,13 @@ def build_setups(args):
 
     if not args.no_rerank:
         # Rerank 는 부품이라 Pipeline 에 끼워서 쓴다. 직접 구현하지 않는다.
-        reranker = load_reranker(args.rerank)
+        kwargs = {}
+        if args.rerank == "local" and args.rerank_model:
+            kwargs = {
+                "model": args.rerank_model,
+                "trust_remote_code": args.trust_remote_code,
+            }
+        reranker = load_reranker(args.rerank, **kwargs)
         rr = Pipeline([hybrid, Rerank(reranker, k=args.pool)])
         setups["Hybrid+Rerank"] = lambda q: rr(q).chunks
         if head_dense is not None:
@@ -192,6 +198,13 @@ def main():
                         help="data/ 의 평가 세트 이름. 없으면 --docs 에서 즉석 생성")
     parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
     parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--rerank-model",
+        help="--rerank local 일 때 쓸 HuggingFace 모델. TEI 가 못 받는 걸 재볼 때.",
+    )
+    parser.add_argument(
+        "--trust-remote-code", action="store_true", help="jina 처럼 커스텀 구조일 때"
+    )
     parser.add_argument("--no-rerank", action="store_true", help="리랭커를 빼고 잰다")
     parser.add_argument("--pool", type=int, default=30,
                         help="검색기가 돌려주는 개수. 예산으로 자르므로 넉넉히 준다")

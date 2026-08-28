@@ -60,15 +60,40 @@ class TEIReranker:
 
 
 class LocalReranker:
-    """노트북 안에 크로스 인코더를 올린다. 강의 L05 방식."""
+    """크로스 인코더를 이 프로세스에 직접 올린다.
+
+    **TEI 가 못 받는 모델을 재볼 때 쓴다.** TEI 는 자기가 구현한 구조만
+    돌린다 — Qwen3 리랭커도 jina 도 거부당했다. sentence-transformers 는
+    `trust_remote_code` 로 아무 구조나 받으므로, "그 모델이 실제로 더 나은가"를
+    먼저 여기서 확인하고, 이길 때만 서빙을 고민하면 된다.
+
+    느리다. 지표를 재는 용도이지 서비스용이 아니다.
+
+    Args:
+        model: HuggingFace 모델 이름. 생략하면 `RERANK_MODEL`.
+        device: 생략하면 cuda → mps → cpu 순으로 알아서 고른다.
+        max_length: 질문+문서를 이 토큰 수로 자른다.
+        trust_remote_code: jina 처럼 커스텀 코드가 필요한 모델에 True.
+    """
 
     name = "local"
 
-    def __init__(self, model=None, device="cuda", max_length=512):
+    def __init__(self, model=None, device=None, max_length=512, trust_remote_code=False):
+        import torch
         from sentence_transformers import CrossEncoder
 
+        if device is None:
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
         self.model = CrossEncoder(
-            model or RERANK_MODEL, device=device, max_length=max_length
+            model or RERANK_MODEL,
+            device=device,
+            max_length=max_length,
+            trust_remote_code=trust_remote_code,
         )
 
     def score(self, query, texts):
