@@ -247,18 +247,8 @@ def analyze_file_extensions(df: pd.DataFrame) -> None:
 # ============================================================
 
 
-def run_csv_eda(csv_path: Path) -> pd.DataFrame:
-    """전체 CSV 탐색적 데이터 분석(EDA) 파이프라인을 순차적으로 실행합니다.
+def run_csv_eda(csv_path: Path):
 
-    Args:
-        csv_path (Path): 분석 대상 CSV 파일 경로.
-
-    Returns:
-        pd.DataFrame: 분석이 완료된 로드된 데이터프레임.
-
-    Raises:
-        FileNotFoundError: 지정된 경로에 CSV 파일이 존재하지 않을 때 발생.
-    """
     print("=" * 80)
     print("CSV EDA 시작")
     print("=" * 80)
@@ -273,10 +263,15 @@ def run_csv_eda(csv_path: Path) -> pd.DataFrame:
     print(f"CSV 로드 완료: {df.shape}")
 
     analyze_basic(df)
+
     analyze_columns(df)
+
     analyze_duplicates(df)
+
     analyze_unique_values(df)
+
     analyze_text_columns(df)
+
     analyze_file_extensions(df)
 
     return df
