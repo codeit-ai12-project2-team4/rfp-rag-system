@@ -14,6 +14,10 @@ from langchain_core.embeddings import Embeddings
 # 팀 공용 JupyterHub 가 도는 VM 에서는 이 포트를 절대 쓰면 안 된다.
 TEI_EMBED_URL = os.environ.get("TEI_EMBED_URL", "http://localhost:8085")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "dragonkue/BGE-m3-ko")
+# Qwen3-Embedding 같은 인스트럭션 튜닝 모델은 **질의에만** 지시문을 붙여야
+# 제 성능이 나온다. 문서 쪽은 그냥 넣는다. 그래서 인덱스를 다시 안 만들어도 된다.
+# BGE-m3 는 이런 게 없으므로 기본값은 꺼 둔다.
+EMBED_INSTRUCT = os.environ.get("EMBED_INSTRUCT", "")
 
 
 
@@ -33,11 +37,20 @@ class TEIEmbeddings(Embeddings):
     TEI 기본값이 32 라서 그보다 크게 보내면 413 이 뜬다.
     """
 
-    def __init__(self, url=TEI_EMBED_URL, batch_size=32, timeout=120, truncate=True):
+    def __init__(
+        self,
+        url=TEI_EMBED_URL,
+        batch_size=32,
+        timeout=120,
+        truncate=True,
+        instruct=None,
+    ):
         self.url = url.rstrip("/")
         self.batch_size = batch_size
         self.timeout = timeout
         self.truncate = truncate
+        # 질의 앞에 붙일 지시문. 빈 문자열이면 안 붙인다.
+        self.instruct = EMBED_INSTRUCT if instruct is None else instruct
 
     def _post(self, texts):
         response = requests.post(
@@ -59,6 +72,13 @@ class TEIEmbeddings(Embeddings):
         return vectors
 
     def embed_query(self, text):
+        """질의를 벡터로. 인스트럭션 모델이면 지시문을 앞에 붙인다.
+
+        `embed_documents` 는 안 붙인다. Qwen3-Embedding 계열이 그렇게 학습됐고,
+        문서 쪽을 안 건드리니 **인덱스를 다시 만들 필요가 없다.**
+        """
+        if self.instruct:
+            text = f"Instruct: {self.instruct}\nQuery: {text}"
         return self._post([text])[0]
 
     def health(self):
@@ -68,6 +88,7 @@ class TEIEmbeddings(Embeddings):
             "model": info.get("model_id"),
             "max_input_length": info.get("max_input_length"),
             "dim": len(self.embed_query("확인")),
+            "instruct": self.instruct or "(없음)",
         }
 
 
