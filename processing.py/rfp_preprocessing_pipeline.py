@@ -238,8 +238,8 @@ FIELD_ALIASES = {
 # 경계로 삼는다. 대신 몇 줄까지 이어붙일지는 METADATA_VALUE_MAX_LINES로
 # 별도 제한한다(무한정 이어지는 것을 방지).
 METADATA_VALUE_BOUNDARY = re.compile(r"[□■○◦※]")
-METADATA_VALUE_MAX_LEN = 50
-METADATA_VALUE_MAX_LINES = 1
+METADATA_VALUE_MAX_LEN = 200
+METADATA_VALUE_MAX_LINES = 3
 
 # [버그 수정] □■○◦※ 마커가 없어도 "4.", "나." 같은 새 조항 번호가 시작되면
 # 값이 끝난 것으로 본다. 이게 없으면 사업기간 값이 다음 줄의 다른 필드
@@ -744,7 +744,7 @@ def _render_table(frame: dict) -> tuple[str, str]:
             for r in range(row0, min(row0 + cell["rowspan"], rows)):
                 for c in range(col0, min(col0 + cell["colspan"], cols)):
                     grid[r][c] = cell["text"]
-    except RuntimeError as e:
+    except Exception as e:  # noqa: BLE001
         # [버그 수정] 원본 코드는 RuntimeError만 잡았는데, 여기서 실제로
         # 날 수 있는 오류(IndexError 등)는 RuntimeError가 아니라서 사실상
         # 한 번도 안 잡혔다. 사용자가 실제 100건 실행에서 동일 패턴의
@@ -910,7 +910,7 @@ def extract_hwp_document(path: Path) -> ExtractionResult:
             else:
                 raise ValueError(f"알 수 없는 추출 방법: {method}")
 
-        except RuntimeError as e:
+        except Exception as e:  # noqa: BLE001
             # [버그 수정] HwpParseError(Exception 상속)와 olefile의
             # NotOleFileError(OSError 상속) 모두 RuntimeError가 아니라서
             # 기존 "except RuntimeError"로는 못 잡았다. 그러면 hwp_raw가
@@ -964,7 +964,7 @@ def _find_best_pdf_tables(page) -> list:
     for settings in _PDF_TABLE_STRATEGIES:
         try:
             tables = page.find_tables(table_settings=settings)
-        except RuntimeError:
+        except Exception:  # noqa: BLE001, S112
             # [버그 수정] pdfplumber/pdfminer가 던지는 파싱 오류도
             # RuntimeError가 아닐 수 있다. 한 전략이 실패해도 다른 전략은
             # 계속 시도해야 하므로 넓게 잡는다.
@@ -1041,7 +1041,7 @@ def extract_pdf_document(path: Path) -> ExtractionResult:
             attempted_errors={},
         )
 
-    except RuntimeError as e:
+    except Exception as e:  # noqa: BLE001
         # [버그 수정] pdfplumber.open() 등에서 나는 실제 예외(OSError,
         # PDFSyntaxError 등)는 RuntimeError가 아니어서 기존 except로는
         # 못 잡고 그대로 새어나갔다.
@@ -1223,6 +1223,75 @@ def clean_text(
 
 
 # ============================================================
+# 13-1. 표 구조 제거 (Markdown 표 -> 셀 구분자만 남긴 평문)
+# ============================================================
+#
+# 실험 결과 표를 Markdown 그리드(|헤더|---|값|)로 살려서 임베딩하는 것보다
+# 격자(테두리 파이프, 구분행)를 걷어내고 셀 값만 구분자로 이어붙인 평문이
+# 검색 성능이 더 좋다고 판단되어 도입. _render_table/_render_matrix는
+# 그대로 두고(성공/부분/실패 판정과 report 집계는 fill_ratio 기준으로
+# 여전히 정확하게 동작), 다 만들어진 텍스트를 마지막에 한 번 더 정리하는
+# 방식이라 표 판정 로직과는 완전히 분리되어 있다.
+
+PATTERN_TABLE_ESCAPED_MARKUP = re.compile(r"\\([|-])")  # 중첩 표의 \| \- 를 푼다
+# [수정] 참고 코드의 원래 패턴은 "[표 파싱...]"을 찾는데, 실제 이 파이프라인이
+# 남기는 진단 태그는 "[표 복원 실패: ...]"/"[표 부분 복원: ...]"이라 문자열이
+# 다르다. 그대로 쓰면 아무것도 안 지워지므로 실제 태그 문자열에 맞춰 고쳤다.
+PATTERN_TABLE_DEBUG_TAG = re.compile(r"\[표 (?:복원 실패|부분 복원)[^\]]{0,200}\]")
+PATTERN_TABLE_SEPARATOR_ROW = re.compile(
+    r"^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$", re.MULTILINE
+)  # |---|---|
+PATTERN_TABLE_EMPTY_ROW = re.compile(r"^\s*\|(\s*\|)*\s*$", re.MULTILINE)  # |||
+PATTERN_TABLE_BLANK_RUN = re.compile(r"\n{3,}")
+
+
+def strip_table_markup(text: str) -> str:
+    """Markdown 표 문법을 없애고 셀 구분(· )만 남긴다.
+
+    셀 경계(`·`)는 남긴다. 행/열 관계까지 지우면 배점표 같은 표가 뭉개진다.
+    `<br>`은 셀 안(그 줄에 `|`가 있는 경우)이면 칸 내부 줄바꿈이었던
+    것이므로 공백으로, 셀 밖(그 줄에 `|`가 없는 경우)이면 원래 의도대로
+    줄바꿈으로 되돌린다.
+
+    Args:
+        text: clean_text_verbose까지 끝난 정제 텍스트(page_content).
+
+    Returns:
+        str: 구분행/빈 행/진단 태그를 지우고 `|`를 `·`로 바꾼 문자열.
+    """
+
+    # 중첩 표는 안쪽 파이프가 이스케이프돼 온다. 먼저 풀어야 아래 규칙이 먹는다.
+    text = PATTERN_TABLE_ESCAPED_MARKUP.sub(r"\1", text)
+
+    # 표 진단 태그(실패/부분복원)는 report/warnings에서 이미 집계했으니
+    # 본문(임베딩 대상)에는 남길 필요가 없다.
+    text = PATTERN_TABLE_DEBUG_TAG.sub("", text)
+
+    # |---|---| 구분행, ||| 같은 빈 행 제거
+    text = PATTERN_TABLE_SEPARATOR_ROW.sub("", text)
+    text = PATTERN_TABLE_EMPTY_ROW.sub("", text)
+
+    def _convert_br(line: str) -> str:
+        if "|" in line:
+            return line.replace("<br>", " ")
+        return line.replace("<br>", "\n")
+
+    text = "\n".join(_convert_br(line) for line in text.split("\n"))
+
+    # 줄 맨 앞/끝의 | (표 테두리)는 버리고, 셀 사이에 남은 |만 · 로 바꾼다.
+    text = re.sub(r"^\s*\|\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\s*\|\s*$", "", text, flags=re.MULTILINE)
+    text = text.replace("|", " · ")
+
+    # 표만 있다가 비어버린 줄(공백/· 만 남은 줄) 제거
+    text = re.sub(r"^[\s·]*$", "", text, flags=re.MULTILINE)
+
+    text = PATTERN_TABLE_BLANK_RUN.sub("\n\n", text)
+
+    return text.strip()
+
+
+# ============================================================
 # 14. 메타데이터 추출
 # ============================================================
 
@@ -1330,6 +1399,11 @@ def process_document(path: Path) -> dict:
         return base
 
     clean, warnings_list = clean_text_verbose(extraction.text)
+
+    # [표 구조 제거] 표 성공/부분/실패 판정과 경고 집계(위 tables_failed/
+    # tables_partial)는 fill_ratio 기준 그대로 유지하고, 실제 코퍼스에
+    # 들어갈 텍스트만 Markdown 격자를 걷어낸 평문으로 바꾼다.
+    clean = strip_table_markup(clean)
 
     if extraction.tables_failed > 0:
         warnings_list.append(
@@ -1653,7 +1727,7 @@ def run_pipeline(
         try:
             row = process_document(path)
 
-        except RuntimeError as e:
+        except Exception as e:  # noqa: BLE001
             # [버그 수정] 원본 코드는 RuntimeError만 잡았지만, 실제로
             # process_document 내부(특히 olefile)에서 나는 예외는 대부분
             # RuntimeError가 아니다(예: NotOleFileError는 OSError 상속).
