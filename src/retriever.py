@@ -255,7 +255,7 @@ def search_notices(
     closes_after=None,
     index=INDEX,
     embed="tei",
-    chunks=None,
+    chunks=CHUNKS,
     rerank=None,
 ):
     """자연어로 공고를 찾는다. **1단계 — 어떤 공고를 볼지 고르는 화면.**
@@ -264,10 +264,19 @@ def search_notices(
     상위에 들면 그만큼 점수가 올라간다(RRF). 예산·기관·마감일 같은 조건은
     임베딩이 아니라 **메타데이터로 거른다** — 숫자 비교를 벡터에 맡기면 틀린다.
 
-    `chunks` 와 `rerank` 는 기본이 꺼져 있다. 켜면 2단계와 같은 부품이 붙는다 —
-    `chunks` 를 주면 BM25 를 섞고, `rerank` 를 주면 묶기 전에 다시 채점한다.
-    둘 다 후보가 200개라 느리다. 값어치가 있는지는
-    `scripts/eval_notices.py` 로 잰다.
+    **리랭커는 안 쓴다 (2026-08-28 실측, 62문항).** 이 화면은 사람이 목록에서
+    고르므로 1위 정확도보다 **목록 안에 있는지(Top10)** 가 중요하다.
+
+        설정            MRR   Top1  Top10   질문당
+        Dense          0.633 0.532 0.806   0.4초
+        Hybrid         0.663 0.565 0.839   0.7초   ← 채택
+        Dense+Rerank   0.687 0.613 0.839   3.0초
+        Hybrid+Rerank  0.680 0.581 0.871   3.3초
+
+    리랭커는 Top10 을 2문항 더 올리는 대신 질문당 3초를 더 쓴다. 검색창에서
+    3초는 못 쓴다. BM25 를 섞는 건 0.3초라 그건 켠다.
+    2단계(`retrieve`)는 모델이 직접 골라야 하므로 리랭커를 쓴다 — 거기선 순위가
+    곧 답이다. 다시 재려면 `scripts/eval_notices.py`.
 
     Args:
         query: 자연어 질의. "클라우드 전환", "장애인 접근성 개선" 같은 것.
@@ -279,8 +288,9 @@ def search_notices(
         closes_after: 이 날짜 이후 마감 (`"2024-04-01"`).
         index: 인덱스 이름.
         embed: 임베딩 종류.
-        chunks: 청크 이름. 주면 BM25 를 섞는다.
+        chunks: BM25 가 쓸 청크 이름. None 이면 Dense 만 쓴다.
         rerank: 리랭커 종류 (tei / local). 주면 묶기 전에 다시 채점한다.
+            기본은 끔 — 3초가 더 든다.
 
     Returns:
         점수 순 공고 리스트.

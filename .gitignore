@@ -76,6 +76,7 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 test*.ipynb
+*.ipynb
 
 # IPython
 profile_default/
@@ -218,7 +219,6 @@ src/rfp_rag_system
 pyproject.toml
 data/
 notebooks/
-scripts/
 uv.*
 test/
 docker/

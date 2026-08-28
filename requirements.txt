@@ -125,10 +125,6 @@ urllib3==2.7.0
 uuid-utils==0.17.0
 uvicorn==0.52.4
 wcwidth==0.8.2
-websockets==17.0.1
-xxhash==4.0.1
-yarl==1.24.5
-zstandard==0.25.0
 
 
 ### 상기되지 않은 항목들 추가
