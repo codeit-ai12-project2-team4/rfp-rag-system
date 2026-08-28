@@ -507,8 +507,12 @@ def main():
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--index", default=INDEX)
     parser.add_argument("--chunks", default=CHUNKS, help="BM25 가 쓸 청크 이름")
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
-    parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
+    parser.add_argument(
+        "--rerank", default="tei", choices=["tei", "local", "cohere", "fake"]
+    )
     args = parser.parse_args()
 
     if args.export:

@@ -190,7 +190,9 @@ def main():
         required=True,
         help="outputs/chunks 의 청크 이름 (python src/chunking.py 가 찍어 준다)",
     )
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
     parser.add_argument("--name", help="인덱스 이름 (생략하면 청크이름__임베딩)")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 만든다")
     parser.add_argument(

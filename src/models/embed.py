@@ -3,6 +3,7 @@
     embedder = load_embedder("tei")     # 도커로 띄운 TEI (권장)
     embedder = load_embedder("local")   # 노트북 안에 모델을 올림 (강의 방식)
     embedder = load_embedder("fake")    # 아무것도 안 띄우고 배관만 확인
+    embedder = load_embedder("openai")  # OpenAI API (시나리오 B)
 """
 
 import os
@@ -18,6 +19,9 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "dragonkue/BGE-m3-ko")
 # 제 성능이 나온다. 문서 쪽은 그냥 넣는다. 그래서 인덱스를 다시 안 만들어도 된다.
 # BGE-m3 는 이런 게 없으므로 기본값은 꺼 둔다.
 EMBED_INSTRUCT = os.environ.get("EMBED_INSTRUCT", "")
+# 시나리오 B — API 임베딩. GPU 를 안 굽는 대신 호출당 돈이 든다.
+# 청크 9,200개(약 370만 토큰) 기준 3-small $0.07, 3-large $0.48 이다.
+EMBED_OPENAI_MODEL = os.environ.get("EMBED_OPENAI_MODEL", "text-embedding-3-large")
 
 
 
@@ -92,6 +96,53 @@ class TEIEmbeddings(Embeddings):
         }
 
 
+class OpenAIEmbeddings(Embeddings):
+    """OpenAI 임베딩 API. **시나리오 B** — 서버를 안 띄운다.
+
+    GPU 도 도커도 없이 돌아서 배포가 쉽다. 대신 호출당 돈이 들고, 문서가
+    밖으로 나간다 — 원본 RFP 가 NDA 대상이라는 걸 잊으면 안 된다.
+    지금은 지표 비교용이고, 실제로 쓸지는 그 다음 문제다.
+
+    차원이 3,072(3-large)라 BGE-m3 의 768 보다 4배다. 인덱스도 그만큼 커진다.
+
+    Args:
+        model: `text-embedding-3-large` / `text-embedding-3-small`.
+        batch_size: 한 번에 보낼 문장 수. API 는 2,048개까지 받는다.
+        dimensions: 주면 그 차원으로 줄여서 받는다 (3 계열만 지원).
+    """
+
+    def __init__(self, model=None, batch_size=256, dimensions=None):
+        from openai import OpenAI
+
+        self.client = OpenAI()
+        self.model = model or EMBED_OPENAI_MODEL
+        self.batch_size = batch_size
+        self.dimensions = dimensions
+
+    def _post(self, texts):
+        # 빈 문자열을 보내면 400 이 난다. 공백 하나로 바꿔 둔다.
+        cleaned = [text if text.strip() else " " for text in texts]
+        extra = {"dimensions": self.dimensions} if self.dimensions else {}
+        response = self.client.embeddings.create(
+            model=self.model, input=cleaned, **extra
+        )
+        return [item.embedding for item in response.data]
+
+    def embed_documents(self, texts):
+        vectors = []
+        for start in range(0, len(texts), self.batch_size):
+            vectors.extend(self._post(texts[start : start + self.batch_size]))
+            print(f"  임베딩 {min(start + self.batch_size, len(texts)):,}/{len(texts):,}",
+                  end="\r")
+        return vectors
+
+    def embed_query(self, text):
+        return self._post([text])[0]
+
+    def health(self):
+        return {"model": self.model, "dim": len(self.embed_query("확인"))}
+
+
 class FakeEmbeddings(Embeddings):
     """가짜 임베딩. 서버도 GPU 도 없이 배관만 확인할 때 쓴다.
 
@@ -125,12 +176,19 @@ class FakeEmbeddings(Embeddings):
 def load_embedder(kind="tei", model=None, **kwargs):
     """임베딩 모델을 붙인다.
 
-    tei     도커로 띄운 TEI 서버 (권장)
-    local   노트북 안에 sentence-transformers 로 올림 (강의 방식)
+    tei     도커로 띄운 TEI 서버 (시나리오 A, 권장)
+    local   노트북 안에 sentence-transformers 로 올림
+    openai  OpenAI 임베딩 API (시나리오 B)
     fake    가짜. 배관 확인용
+
+    **임베더를 바꾸면 인덱스를 다시 만들어야 한다.** 벡터 공간이 달라서
+    옛 인덱스로 조회하면 조용히 엉뚱한 결과가 나온다.
     """
     if kind == "tei":
         return TEIEmbeddings(**kwargs)
+
+    if kind == "openai":
+        return OpenAIEmbeddings(model=model, **kwargs)
 
     if kind == "local":
         from langchain_huggingface import HuggingFaceEmbeddings
