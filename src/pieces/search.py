@@ -21,7 +21,10 @@ Hybrid  둘을 섞는다.             보통 이게 제일 낫다
 등수는 그런 문제가 없다. 60 은 관례값이고, 키우면 등수 차이가 덜 중요해진다.
 """
 
+import os
+import time
 from collections import OrderedDict
+from enum import Enum
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -114,6 +117,249 @@ def run_search(searcher, state):
 
 
 # --- 부품 ---------------------------------------------------------------
+
+
+# Splade 는 TEI 로도 돌릴 수 있다. 로컬에서 코퍼스를 인코딩하면 맥이 뜨거우니
+# 되도록 이쪽을 쓴다. 도커에 `--pooling=splade` 로 띄우고 8084 로 연다.
+# **엔드포인트가 다르다** — splade pooling 모델에 `/embed` 를 부르면 424 가 난다.
+TEI_SPLADE_URL = os.environ.get("TEI_SPLADE_URL", "http://localhost:8084")
+
+
+class SpladeModel(Enum):
+    """어휘 확장을 위해 추천하는 Splade 모델 라인업."""
+
+    PIXIE = "telepix/PIXIE-Splade-v1.5"
+    JANG = "yjoonjang/splade-ko-v1"
+
+
+class Splade:
+    """어휘 확장(Splade)으로 찾는 희소 검색기.
+
+    BM25 는 질문에 있는 글자만 본다. Splade 는 마스크 언어모델을 돌려
+    "클라우드" 문서에 "인프라·서버" 같은 안 적힌 낱말까지 가중치를 붙인다.
+    키워드 검색인데 동의어를 스스로 만드는 셈이다.
+
+    문서 벡터는 어휘 크기(수만 차원)지만 실제로 0 이 아닌 칸은 수백 개뿐이라,
+    상위 `top_terms` 개만 (칸번호, 값) 두 배열로 들고 있는다. 8,381 청크 기준
+    17MB 정도다. 전부 들고 있으면 수 GB 가 되고 맥이 뜨거워진다.
+
+    인덱스는 `cache` 이름을 주면 `outputs/vectorstore/` 에 저장했다가 다음
+    실행에서 그대로 읽는다. 코퍼스 인코딩이 이 부품에서 제일 비싼 일이다.
+
+    Attributes:
+        k (int): 기본으로 돌려줄 청크 개수.
+        chunks (list): 검색 대상 청크 리스트.
+        model_id (str): 허깅페이스 모델 ID.
+        idx (np.ndarray): (청크수, top_terms) 어휘 칸번호.
+        val (np.ndarray): (청크수, top_terms) 그 칸의 가중치.
+    """
+
+    def __init__(
+        self,
+        chunks,
+        model=SpladeModel.PIXIE,
+        k=5,
+        batch_size=16,
+        top_terms=256,
+        url=None,
+        cache=None,
+        verbose=False,
+    ):
+        """모델을 올리고 청크를 인코딩한다. 캐시가 있으면 인코딩을 건너뛴다.
+
+        Args:
+            chunks (iterable): page_content 를 가진 청크들.
+            model (SpladeModel or str): 모델 Enum 또는 허깅페이스 ID.
+            k (int): 기본 반환 개수. 기본값 5.
+            batch_size (int): 한 번에 인코딩할 청크 수. 기본값 16.
+                맥에서 열이 오르면 8 로 줄인다.
+            top_terms (int): 문서당 남길 상위 낱말 수. 기본값 256.
+            url (str, optional): TEI 서버 주소. 주면 `/embed_sparse` 로 맡기고
+                로컬에 모델을 안 올린다. "tei" 를 주면 기본 주소를 쓴다.
+            cache (str, optional): 캐시 이름. 보통 청크 세트 이름을 준다.
+                주지 않으면 매번 코퍼스를 다시 인코딩한다.
+            verbose (bool): 진행 상황 출력 여부.
+        """
+        self.k = k
+        self.chunks = list(chunks)
+        self.model_id = model.value if isinstance(model, SpladeModel) else model
+        self.batch_size = batch_size
+        self.top_terms = top_terms
+        self.url = TEI_SPLADE_URL if url == "tei" else (url.rstrip("/") if url else None)
+        self._model = None
+        self._tokenizer = None
+
+        path = None
+        if cache:
+            from config import settings
+
+            stem = f"{cache}__splade__{self.model_id.split('/')[-1]}"
+            path = settings.VECTORSTORE / f"{stem}.npz"
+
+        if path and path.exists():
+            saved = np.load(path)
+            self.idx, self.val = saved["idx"], saved["val"]
+            if verbose:
+                print(f"Splade 인덱스 재사용 {path.name}")
+            return
+
+        started = time.time()
+        if verbose:
+            print(f"Splade 인덱스 생성 중 … ({self.model_id}, 청크 {len(self.chunks):,}개)")
+        self.idx, self.val = self._encode([c.page_content for c in self.chunks], verbose)
+        if verbose:
+            print(f"Splade 인덱스 {time.time() - started:.0f}초")
+
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(path, idx=self.idx, val=self.val)
+
+    def _load(self):
+        """모델과 토크나이저를 한 번만 올린다.
+
+        Returns:
+            tuple: (tokenizer, model, device) 세 값.
+        """
+        if self._model is not None:
+            return self._tokenizer, self._model, self._device
+
+        import torch
+        from transformers import AutoModelForMaskedLM, AutoTokenizer, logging
+
+        logging.set_verbosity_error()
+        if torch.cuda.is_available():
+            self._device = "cuda"
+        elif torch.backends.mps.is_available():
+            self._device = "mps"
+        else:
+            self._device = "cpu"
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self._model = AutoModelForMaskedLM.from_pretrained(self.model_id)
+        self._model.to(self._device).eval()  # 옮기는 건 여기 한 번뿐이다
+        return self._tokenizer, self._model, self._device
+
+    def _encode(self, texts, verbose=False):
+        """텍스트들을 희소 벡터로 바꿔 (칸번호, 값) 두 배열로 돌려준다.
+
+        Args:
+            texts (list[str]): 인코딩할 텍스트들.
+            verbose (bool): 진행률 출력 여부.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: 각각 (개수, top_terms) 모양.
+        """
+        if self.url:
+            return self._encode_tei(texts, verbose)
+
+        import torch
+
+        tokenizer, model, device = self._load()
+        n = min(self.top_terms, model.config.vocab_size)
+        idx = np.zeros((len(texts), n), dtype=np.int32)
+        val = np.zeros((len(texts), n), dtype=np.float32)
+
+        for at in range(0, len(texts), self.batch_size):
+            batch = texts[at : at + self.batch_size]
+            inputs = tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            ).to(device)
+
+            with torch.no_grad():
+                logits = model(**inputs).logits
+
+            # Splade 핵심: log(1+relu(logits)) 를 문장 방향으로 max pooling
+            weights = torch.log1p(torch.relu(logits))
+            weights = weights * inputs.attention_mask.unsqueeze(-1)
+            pooled = weights.max(dim=1).values
+
+            top = pooled.topk(n, dim=-1)  # 어차피 대부분 0 이라 상위만 남긴다
+            idx[at : at + len(batch)] = top.indices.cpu().numpy()
+            val[at : at + len(batch)] = top.values.cpu().numpy()
+
+            if verbose and at and at % (self.batch_size * 50) == 0:
+                print(f"  {at:,}/{len(texts):,}")
+
+        return idx, val
+
+    def _encode_tei(self, texts, verbose=False):
+        """인코딩을 TEI 에 맡긴다. `/embed_sparse` 는 (칸번호, 값) 쌍만 돌려준다.
+
+        Args:
+            texts (list[str]): 인코딩할 텍스트들.
+            verbose (bool): 진행률 출력 여부.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: 각각 (개수, top_terms) 모양.
+        """
+        import requests
+
+        n = self.top_terms
+        idx = np.zeros((len(texts), n), dtype=np.int32)
+        val = np.zeros((len(texts), n), dtype=np.float32)
+
+        for at in range(0, len(texts), self.batch_size):
+            batch = texts[at : at + self.batch_size]
+            response = requests.post(
+                f"{self.url}/embed_sparse",
+                json={"inputs": batch, "truncate": True},
+                timeout=120,
+            )
+            if response.status_code == 424:
+                raise RuntimeError(
+                    f"{self.url} 가 splade 모델이 아니다. "
+                    "도커에서 --pooling=splade 로 띄웠는지 본다."
+                )
+            response.raise_for_status()
+
+            for row, pairs in enumerate(response.json()):
+                pairs = sorted(pairs, key=lambda p: -p["value"])[:n]
+                idx[at + row, : len(pairs)] = [p["index"] for p in pairs]
+                val[at + row, : len(pairs)] = [p["value"] for p in pairs]
+
+            if verbose and at and at % (self.batch_size * 50) == 0:
+                print(f"  {at:,}/{len(texts):,}")
+
+        return idx, val
+
+    def search(self, query, k=None):
+        """질문과 내적이 큰 상위 k 개 청크를 돌려준다.
+
+        Args:
+            query (str): 질문.
+            k (int, optional): 반환 개수. 없으면 self.k.
+
+        Returns:
+            list: 점수 높은 순 청크 리스트.
+        """
+        k = k or self.k
+        q_idx, q_val = self._encode([query])
+        # 질문 쪽 낱말만 모아 한 번에 훑는다. 청크마다 np.dot 하면 8천 번이다
+        size = max(int(self.idx.max()), int(q_idx.max())) + 1
+        lookup = np.zeros(size, dtype=np.float32)
+        lookup[q_idx[0]] = q_val[0]
+        scores = (lookup[self.idx] * self.val).sum(axis=1)
+
+        order = np.argsort(scores)[::-1][:k]
+        return [self.chunks[i] for i in order if scores[i] > 0]
+
+    def __call__(self, state):
+        """조립대에 끼울 때 쓴다.
+
+        Args:
+            state: 파이프라인 상태 객체.
+
+        Returns:
+            검색 결과가 담긴 상태 객체.
+        """
+        return run_search(self, state)
+
+    def __repr__(self):
+        return f"Splade(model={self.model_id.split('/')[-1]}, k={self.k})"
 
 
 class Dense:
@@ -381,3 +627,26 @@ class FilterBy:
         if self.budget_max:
             conds.append(f"예산≤{self.budget_max / 1e8:.1f}억")
         return f"FilterBy({', '.join(conds) or '조건없음'})"
+
+
+if __name__ == "__main__":
+    # Splade 점수 계산만 확인한다. 모델은 안 올린다.
+    import types
+
+    class _Chunk:
+        def __init__(self, text):
+            self.page_content = text
+
+    s = Splade.__new__(Splade)
+    s.chunks = [_Chunk("a"), _Chunk("b"), _Chunk("c")]
+    s.k = 2
+    s.idx = np.array([[0, 1], [1, 2], [3, 4]], np.int32)
+    s.val = np.array([[1.0, 1.0], [2.0, 1.0], [5.0, 5.0]], np.float32)
+    s._model = types.SimpleNamespace(config=types.SimpleNamespace(vocab_size=8))
+    s._encode = lambda texts: (
+        np.array([[1, 2]], np.int32),
+        np.array([[1.0, 1.0]], np.float32),
+    )
+    # b = 2*1 + 1*1 = 3, a = 1, c = 0 이라 탈락
+    assert [c.page_content for c in s.search("질문")] == ["b", "a"]
+    print("Splade 점수 계산 통과")
