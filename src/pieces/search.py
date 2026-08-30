@@ -161,6 +161,7 @@ class Splade:
         k=5,
         batch_size=16,
         top_terms=256,
+        max_length=1024,
         url=None,
         cache=None,
         verbose=False,
@@ -174,6 +175,9 @@ class Splade:
             batch_size (int): 한 번에 인코딩할 청크 수. 기본값 16.
                 맥에서 열이 오르면 8 로 줄인다.
             top_terms (int): 문서당 남길 상위 낱말 수. 기본값 256.
+            max_length (int): 자를 토큰 수. 기본값 1024.
+                512 로 두면 1,200자 청크의 뒤쪽 40%가 통째로 안 보인다.
+                ModernBERT 계열은 8192 까지 받으므로 여유가 있다.
             url (str, optional): TEI 서버 주소. 주면 `/embed_sparse` 로 맡기고
                 로컬에 모델을 안 올린다. "tei" 를 주면 기본 주소를 쓴다.
             cache (str, optional): 캐시 이름. 보통 청크 세트 이름을 준다.
@@ -185,6 +189,7 @@ class Splade:
         self.model_id = model.value if isinstance(model, SpladeModel) else model
         self.batch_size = batch_size
         self.top_terms = top_terms
+        self.max_length = max_length
         self.url = TEI_SPLADE_URL if url == "tei" else (url.rstrip("/") if url else None)
         self._model = None
         self._tokenizer = None
@@ -266,7 +271,7 @@ class Splade:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=512,
+                max_length=self.max_length,
             ).to(device)
 
             with torch.no_grad():
