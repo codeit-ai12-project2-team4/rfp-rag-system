@@ -20,12 +20,12 @@ from models.embed import (
 )
 from models.health import check_servers
 from models.llm import (
+    HFLLM,
     LOCAL_LLM_MODEL,
     MODEL_SIZE_GB,
     OPENAI_MODEL,
     VLLM_URL,
     EchoLLM,
-    HFLLM,
     OpenAILLM,
     load_llm,
 )

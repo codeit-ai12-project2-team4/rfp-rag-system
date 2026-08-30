@@ -13,6 +13,9 @@ import os
 from resources import free_disk_gb
 
 VLLM_URL = os.environ.get("VLLM_URL", "http://localhost:8087/v1")
+# ollama 는 OpenAI 호환 엔드포인트를 준다. 그래서 새 클래스가 필요 없다.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b")
 LOCAL_LLM_MODEL = os.environ.get(
     "LOCAL_LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507"
 )  # "Qwen/Qwen2.5-7B-Instruct")
@@ -161,6 +164,7 @@ def load_llm(kind="openai", model=None, **kwargs):
     | `openai` | OpenAI API | 0 | 팀 한도 $20 |
     | `echo`   | 가짜. 프롬프트 확인용 | 0 | 0 |
     | `vllm`   | 도커로 띄운 vLLM | 이미지 10GB + 모델 | 0 |
+    | `ollama` | 맥에서 ollama (OpenAI 호환) | 모델 크기 | 0 |
     | `hf`     | 노트북 안에 transformers 로 (강의 방식) | 모델 크기만큼 | 0 |
 
     **기본값이 openai 인 이유** — `hf` 는 7B fp16 이면 15GB 를 내려받는다.
@@ -177,8 +181,20 @@ def load_llm(kind="openai", model=None, **kwargs):
             name="vllm",
             **kwargs,
         )
+    if kind == "ollama":
+        # 맥에서 돌린다. 돈이 안 들고 문서가 밖으로 안 나간다 — NDA 대상이라 중요하다.
+        return OpenAILLM(
+            model=model or OLLAMA_MODEL,
+            base_url=kwargs.pop("base_url", OLLAMA_URL),
+            api_key="ollama",
+            name="ollama",
+            **kwargs,
+        )
     if kind == "openai":
         return OpenAILLM(model=model or OPENAI_MODEL, name="openai", **kwargs)
     if kind == "echo":
         return EchoLLM(**kwargs)
-    raise ValueError(f"모르는 LLM 종류: {kind!r} (hf / vllm / openai / echo 중 하나)")
+    raise ValueError(
+        f"모르는 LLM 종류: {kind!r} "
+        "(hf / vllm / ollama / openai / echo 중 하나)"
+    )
