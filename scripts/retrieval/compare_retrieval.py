@@ -31,8 +31,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))   # 평평한 import: chunking, preprocessing …
-sys.path.insert(0, str(ROOT))           # config.settings
+sys.path.insert(0, str(ROOT / "src"))  # 평평한 import: chunking, preprocessing …
+sys.path.insert(0, str(ROOT))  # config.settings
 
 import pandas as pd
 
@@ -40,7 +40,17 @@ import chunking
 import evaluation as ev
 from config import settings
 from models import load_embedder, load_reranker
-from pieces import BM25, AddKeywords, Dense, Hybrid, Pipeline, Rerank, Widen
+from pieces import (
+    BM25,
+    AddKeywords,
+    Dense,
+    Hybrid,
+    Pipeline,
+    Rerank,
+    Splade,
+    SpladeModel,
+    Widen,
+)
 from preprocessing import load_documents
 from vectorstore import list_stores, load_store
 
@@ -86,6 +96,22 @@ def build_setups(args):
     hybrid = Hybrid([dense, bm25], k=args.pool, pool=args.pool)
     setups["Hybrid"] = lambda q: hybrid.search(q, args.pool)
 
+    # Splade 는 코퍼스를 마스크 언어모델로 통째로 인코딩한다. 캐시가 없으면
+    # 맥이 몇 분간 뜨겁다. 그래서 기본은 꺼두고 --splade 로만 켠다.
+    splade = None
+    if args.splade:
+        splade = Splade(
+            chunks,
+            model=args.splade_model,
+            k=args.pool,
+            batch_size=args.splade_batch,
+            url=args.splade_url,
+            cache=args.chunks,
+            verbose=True,
+        )
+        searchers.append(splade)
+        setups["Splade"] = lambda q: splade.search(q, args.pool)
+
     # 머리말 인덱스가 있으면 같이 잰다
     head_index = f"{args.chunks}__header__{args.embed}"
     head_dense = None
@@ -97,6 +123,15 @@ def build_setups(args):
         setups["Hybrid+머리말"] = lambda q: head_hybrid.search(q, args.pool)
     else:
         print(f"  ({head_index} 가 없어 머리말 비교는 건너뜁니다)")
+
+    # Splade 를 섞는 두 가지. 방법 A 는 어휘 매칭 + 어휘 확장, 방법 B 는
+    # 뜻(Dense) + 어휘 확장이다.
+    bm25_splade = dense_splade = None
+    if splade is not None:
+        bm25_splade = Hybrid([bm25, splade], weights=[0.4, 0.6], k=args.pool, pool=args.pool)
+        setups["Hybrid(BM25+Splade)"] = lambda q: bm25_splade.search(q, args.pool)
+        dense_splade = Hybrid([dense, splade], weights=[0.5, 0.5], k=args.pool, pool=args.pool)
+        setups["Hybrid(Dense+Splade)"] = lambda q: dense_splade.search(q, args.pool)
 
     if not args.no_rerank:
         # Rerank 는 부품이라 Pipeline 에 끼워서 쓴다. 직접 구현하지 않는다.
@@ -126,6 +161,15 @@ def build_setups(args):
         # 의역 유형("돈이 얼마나 드나" → "사업예산")을 겨냥한 것이다.
         keyword_pipe = Pipeline([AddKeywords(), hybrid, Rerank(reranker, k=args.pool)])
         setups["용어추가+Hybrid+Rerank"] = lambda q: keyword_pipe(q).chunks
+
+        # Splade 조합을 리랭커에 태운다. 후보를 만드는 쪽이 바뀌면 리랭커가
+        # 볼 30개가 바뀌므로, 리랭커 없이 잰 순위는 그대로 가지 않는다.
+        for label, mixer in (("Hybrid(BM25+Splade)", bm25_splade),
+                             ("Hybrid(Dense+Splade)", dense_splade)):
+            if mixer is None:
+                continue
+            pipe = Pipeline([mixer, Rerank(reranker, k=args.pool)])
+            setups[f"{label}+Rerank"] = (lambda p: lambda q: p(q).chunks)(pipe)
 
         if head_dense is not None:
             head_rr = Pipeline([head_dense, Rerank(reranker, k=args.pool)])
@@ -159,6 +203,7 @@ def scope_to_doc(search, searchers, where):
     Returns:
         공고를 좁혀 검색하는 함수.
     """
+
     def run(question):
         for searcher in searchers:
             searcher.doc_ids = where.get(question)
@@ -201,8 +246,10 @@ def check_answers_exist(pairs, chunks):
         for kind, (alive, total) in broken.items():
             print(f"      {kind} {alive}/{total}")
     else:
-        print("  정답은 전부 청크 안에 있다 "
-              + " · ".join(f"{k} {v[0]}/{v[1]}" for k, v in out.items()))
+        print(
+            "  정답은 전부 청크 안에 있다 "
+            + " · ".join(f"{k} {v[0]}/{v[1]}" for k, v in out.items())
+        )
     return out
 
 
@@ -210,10 +257,16 @@ def main():
     """검색 방법을 비교해 outputs/eval_results/retrieval.csv 를 만든다."""
     parser = argparse.ArgumentParser(description="검색 방법 비교")
     parser.add_argument("--chunks", required=True, help="outputs/chunks 의 청크 이름")
-    parser.add_argument("--docs", default="cleaned_documents",
-                        help="질문을 즉석에서 뽑을 전처리본 (--evalset 없을 때만)")
-    parser.add_argument("--evalset", default="eval_qa",
-                        help="data/ 의 평가 세트 이름. 없으면 --docs 에서 즉석 생성")
+    parser.add_argument(
+        "--docs",
+        default="cleaned_documents",
+        help="질문을 즉석에서 뽑을 전처리본 (--evalset 없을 때만)",
+    )
+    parser.add_argument(
+        "--evalset",
+        default="eval_qa",
+        help="data/ 의 평가 세트 이름. 없으면 --docs 에서 즉석 생성",
+    )
     parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
     )
@@ -234,12 +287,43 @@ def main():
         help="Hybrid 의 BM25 비중들. 쉼표로 구분",
     )
     parser.add_argument("--no-rerank", action="store_true", help="리랭커를 빼고 잰다")
-    parser.add_argument("--pool", type=int, default=30,
-                        help="검색기가 돌려주는 개수. 예산으로 자르므로 넉넉히 준다")
+    parser.add_argument(
+        "--splade",
+        action="store_true",
+        help="Splade 희소 검색을 같이 잰다 (코퍼스 인코딩에 시간이 든다)",
+    )
+    parser.add_argument(
+        "--splade-model",
+        default=SpladeModel.PIXIE.value,
+        choices=[m.value for m in SpladeModel],
+        help="쓸 Splade 모델",
+    )
+    parser.add_argument(
+        "--splade-batch",
+        type=int,
+        default=16,
+        help="Splade 인코딩 배치 크기. 맥이 뜨거우면 8 이나 4 로 줄인다",
+    )
+    parser.add_argument(
+        "--splade-url",
+        nargs="?",
+        const="tei",
+        default=None,
+        help="TEI 에 인코딩을 맡긴다. 그냥 주면 8084, 주소를 주면 그 주소",
+    )
+    parser.add_argument(
+        "--pool",
+        type=int,
+        default=30,
+        help="검색기가 돌려주는 개수. 예산으로 자르므로 넉넉히 준다",
+    )
     parser.add_argument("--budget", type=int, default=settings.MAX_CONTEXT_CHARS)
-    parser.add_argument("--scoped", action="store_true",
-                        help="질문이 가리키는 공고 안에서만 찾는다. "
-                             "요약 카드를 만들 때의 실제 흐름이다")
+    parser.add_argument(
+        "--scoped",
+        action="store_true",
+        help="질문이 가리키는 공고 안에서만 찾는다. "
+        "요약 카드를 만들 때의 실제 흐름이다",
+    )
     parser.add_argument("--out", default=str(settings.EVAL_RESULTS / "retrieval.csv"))
     args = parser.parse_args()
 
@@ -295,8 +379,10 @@ def main():
         part = df[df["유형"] == kind]
         hit = part.nlargest(1, metric).iloc[0]
         mrr = part.nlargest(1, "MRR").iloc[0]
-        print(f"  {kind:<8} 적중률 {hit['설정']:<14} {hit[metric]:.3f}   "
-              f"MRR {mrr['설정']:<14} {mrr['MRR']:.3f}")
+        print(
+            f"  {kind:<8} 적중률 {hit['설정']:<14} {hit[metric]:.3f}   "
+            f"MRR {mrr['설정']:<14} {mrr['MRR']:.3f}"
+        )
     print("\n리랭커는 적중률이 아니라 등수를 올리는 부품이다. MRR 이 올랐는지 보라.")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
