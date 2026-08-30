@@ -9,6 +9,7 @@
 """
 
 import os
+import time
 
 import requests
 
@@ -17,6 +18,9 @@ RERANK_MODEL = os.environ.get("RERANK_MODEL", "dragonkue/bge-reranker-v2-m3-ko")
 # 시나리오 B — API 리랭커. TEI 가 못 받는 구조를 서빙 고민 없이 써 본다.
 COHERE_MODEL = os.environ.get("COHERE_MODEL", "rerank-v3.5")
 COHERE_URL = "https://api.cohere.com/v2/rerank"
+# 체험 키는 분당 10회다. 평가 한 번에 200회 넘게 부르므로 안 조이면 429 로 죽는다.
+# 유료 키면 0 으로 두면 된다.
+COHERE_MIN_INTERVAL = float(os.environ.get("COHERE_MIN_INTERVAL", "6.5"))
 
 
 
@@ -123,8 +127,12 @@ class CohereReranker:
 
     name = "cohere"
 
-    def __init__(self, model=None, api_key=None, timeout=60):
+    def __init__(self, model=None, api_key=None, timeout=60, min_interval=None):
         self.model = model or COHERE_MODEL
+        self.min_interval = (
+            COHERE_MIN_INTERVAL if min_interval is None else min_interval
+        )
+        self._last_call = 0.0
         self.api_key = api_key or os.environ.get("COHERE_API_KEY")
         if not self.api_key:
             raise RuntimeError(
@@ -139,15 +147,30 @@ class CohereReranker:
         Cohere 는 점수 순으로 정렬해서 주므로 `index` 로 되돌려 놓아야 한다.
         안 그러면 부품 쪽에서 순서가 어긋난다.
         """
-        response = requests.post(
-            COHERE_URL,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.model, "query": query, "documents": texts},
-            timeout=self.timeout,
-        )
+        for attempt in range(6):
+            wait = self.min_interval - (time.time() - self._last_call)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_call = time.time()
+
+            response = requests.post(
+                COHERE_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={"model": self.model, "query": query, "documents": texts},
+                timeout=self.timeout,
+            )
+            if response.status_code == 429:  # 분당 한도. 기다렸다 다시.
+                back = float(response.headers.get("retry-after", 0)) or 10 * (attempt + 1)
+                print(f"  Cohere 한도 — {back:.0f}초 쉬고 재시도", end="\r")
+                time.sleep(back)
+                continue
+            break
+
         if response.status_code != 200:
             raise RuntimeError(
-                f"Cohere 리랭크 실패 {response.status_code}: {response.text[:200]}"
+                f"Cohere 리랭크 실패 {response.status_code}: {response.text[:200]}\n"
+                f"체험 키는 분당 10회입니다. COHERE_MIN_INTERVAL 을 늘리세요 "
+                f"(지금 {self.min_interval}초)."
             )
         scores = [0.0] * len(texts)
         for item in response.json()["results"]:
