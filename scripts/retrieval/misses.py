@@ -7,8 +7,14 @@
     후보밖     청크는 있는데 후보 30개에 못 든다  → 임베더가 못 잡는다
     순위밀림   후보엔 들었는데 예산 밖으로 밀렸다 → 리랭커/예산 문제
 
-    python scripts/misses.py --chunks cleaned_documents_v3__recursive_1200_200
-    python scripts/misses.py --chunks ... --type 배점 --full
+    python scripts/retrieval/misses.py --chunks cleaned_documents_v3__recursive_1200_200
+
+`--b` 를 주면 **두 설정을 짝지어 비교한다.** 평균 MRR 이 0.04 벌어졌을 때
+그게 실체인지 세 문항 우연인지는 평균으로 안 갈린다. 같은 문항을 두 설정에
+똑같이 던져 **어느 문항이 뒤집혔는지** 세야 한다.
+
+    python scripts/retrieval/misses.py --chunks ... --evalset eval_qa_merged \
+      --type 의역 --a "Hybrid+Rerank" --b "Hybrid(BM25+Splade)+Rerank"
 """
 
 import argparse
@@ -16,7 +22,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
@@ -24,9 +30,9 @@ import chunking
 from config import settings
 from evaluation import fit_budget, load_evalset
 from evaluation.evalset import matches
-from models import load_embedder, load_reranker
-from pieces import Dense, Pipeline, Rerank
-from vectorstore import list_stores, load_store
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # compare_retrieval 재사용
+from compare_retrieval import build_setups
 
 
 def flat(text, width=200):
@@ -42,6 +48,68 @@ def around(text, keyword, width=200):
         return body[:width]
     start = max(0, at - width // 3)
     return ("…" if start else "") + body[start : start + width]
+
+
+def hit(search, pair, budget):
+    """이 설정이 이 문항을 맞혔나.
+
+    Args:
+        search: 질문을 받아 청크 리스트를 돌려주는 함수.
+        pair (dict): 평가 문항.
+        budget (int): 컨텍스트 예산 글자 수.
+
+    Returns:
+        bool: 예산 안에 정답이 들어왔으면 True.
+    """
+    kept = fit_budget(search(pair["question"]), budget)
+    return any(matches(c.page_content, pair["keywords"]) for c in kept)
+
+
+def compare(a, b, args, pairs, chunks):
+    """같은 문항을 두 설정에 던져 **뒤집힌 것만** 센다.
+
+    평균이 0.04 벌어졌다는 말로는 아무것도 못 정한다. 141문항에서 두 설정이
+    대부분 같은 답을 주므로, 실제로 갈린 문항은 보통 서너 개다. 그 서너 개를
+    직접 읽어야 채택할지 말지가 정해진다.
+
+    Args:
+        a: 기준 설정의 검색 함수.
+        b: 비교할 설정의 검색 함수.
+        args: 명령줄 인자.
+        pairs (list[dict]): 평가 문항들.
+        chunks (list): 코퍼스 청크 (여기서는 안 쓰지만 호출부와 맞춘다).
+    """
+    only_a, only_b, both, neither = [], [], 0, 0
+    for pair in pairs:
+        got_a = hit(a, pair, args.budget)
+        got_b = hit(b, pair, args.budget)
+        if got_a and got_b:
+            both += 1
+        elif got_a:
+            only_a.append(pair)
+        elif got_b:
+            only_b.append(pair)
+        else:
+            neither += 1
+
+    total = len(pairs)
+    print(f"\n{'=' * 70}\n{args.type} {total}문항")
+    print(f"  둘 다 맞음   {both:>3}")
+    print(f"  {args.a} 만   {len(only_a):>3}")
+    print(f"  {args.b} 만   {len(only_b):>3}")
+    print(f"  둘 다 틀림   {neither:>3}")
+
+    moved = len(only_a) + len(only_b)
+    print(f"\n실제로 갈린 문항 {moved}개 / {total}. ", end="")
+    if moved < 5:
+        print("이 정도면 우연과 구분이 안 됩니다 — 아래를 눈으로 보고 정하세요.")
+    else:
+        print(f"{args.b} 가 순증 {len(only_b) - len(only_a):+d}.")
+
+    for label, group in ((args.b, only_b), (args.a, only_a)):
+        for pair in group:
+            print(f"\n[{label} 만 맞음] {pair['question']}")
+            print(f"    정답  {pair['keywords']}")
 
 
 def main():
@@ -60,15 +128,27 @@ def main():
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--budget", type=int, default=settings.MAX_CONTEXT_CHARS)
     parser.add_argument("--full", action="store_true", help="맞힌 문항도 보여준다")
+    parser.add_argument("--a", default="Hybrid+Rerank", help="펼쳐 볼 설정")
+    parser.add_argument("--b", help="주면 --a 와 짝지어 비교한다")
+    parser.add_argument("--splade", action="store_true")
+    parser.add_argument("--splade-model", default=None)
+    parser.add_argument("--splade-batch", type=int, default=8)
+    parser.add_argument("--splade-url", nargs="?", const="tei", default=None)
+    parser.add_argument("--rerank-model", default=None)
+    parser.add_argument("--trust-remote-code", action="store_true")
+    parser.add_argument("--no-rerank", action="store_true")
+    parser.add_argument("--bm25-weights", default=[0.7])
     args = parser.parse_args()
+    if args.splade_model is None:
+        from pieces import SpladeModel
 
-    index = f"{args.chunks}__header__{args.embed}"
-    if index not in list_stores():
-        sys.exit(f"인덱스가 없습니다: {index}\n"
-                 f"  python src/vectorstore.py --chunks {args.chunks}__header")
+        args.splade_model = SpladeModel.PIXIE.value
 
     chunks = chunking.load_chunks(args.chunks)
-    print(f"청크 {len(chunks):,}개")
+    setups, _ = build_setups(args)
+    for name in (args.a, args.b):
+        if name and name not in setups:
+            sys.exit(f"그런 설정이 없습니다: {name}\n  있는 것: {', '.join(setups)}")
 
     pairs = [p for p in load_evalset(args.evalset) if p.get("answerable", True)]
     if args.type != "all":
@@ -81,15 +161,15 @@ def main():
     if blank:
         print(f"정답이 안 붙은 {len(blank)}문항은 뺍니다 (채점 불가)")
 
-    store = load_store(index, load_embedder(args.embed))
-    pipeline = Pipeline([
-        Dense(store, k=args.pool),
-        Rerank(load_reranker(args.rerank), k=args.top_k),
-    ])
+    if args.b:
+        compare(setups[args.a], setups[args.b], args, pairs, chunks)
+        return
 
+    pipeline = setups[args.a]
+    print(f"설정: {args.a}")
     reasons = Counter()
     for i, pair in enumerate(pairs, 1):
-        found = pipeline(pair["question"]).chunks
+        found = pipeline(pair["question"])
         kept = fit_budget(found, args.budget)
         if any(matches(c.page_content, pair["keywords"]) for c in kept):
             reasons["맞음"] += 1
