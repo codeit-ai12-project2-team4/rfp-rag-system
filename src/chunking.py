@@ -333,15 +333,20 @@ _TOC_MARK = re.compile(r"목\s*차|\[(별지|붙임|첨부)|[·.…⋯]{4,}")
 _LEADER_DOTS = re.compile(r"[·.…⋯]{4,}")
 # "제목 … 12" — 단위 없는 1~3자리 숫자로 끝나는 조각. 쪽번호다.
 _PAGE_REF = re.compile(r"[가-힣A-Za-z\)\]][^\n]{0,60}?[\s\t]+(\d{1,3})(?=\s|$)")
+# v3 목차는 쪽번호가 아예 없는 것이 많다. 대신 절 표시가 한 줄에 몰려 있다 —
+# `Ⅰ. 사업 개요 … Ⅱ. 제안요청 내용 … Ⅲ. 입찰 안내`. 본문에서는 한 줄에
+# 절 표시가 셋씩 나오지 않는다. 코퍼스 전체에서 88줄이 걸리고 전부 목차였다.
+_SECTION_RUN = re.compile(r"[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\s*[.=]")
 
 
-def toc_lines(text, min_refs=1, max_chars=80):
+def toc_lines(text, min_refs=1, max_chars=80, many_refs=3):
     """줄마다 목차인지 판정한다. **`toc_ish` 로 걸러진 청크 안에서만 쓴다.**
 
     목차 줄은 두 가지 꼴이다.
 
     - 단위 없는 쪽번호로 끝나는 짧은 줄 — `1. 사업일반\t1`, `[양식 2] 서약서\t73`.
       본문은 단위가 붙어서(`49,500천원`, `계약일로부터 150일`) 안 걸린다.
+    - 쪽번호가 여럿 모인 긴 줄 — v3 는 목차를 한 줄로 이어 붙인다.
     - 점선 안내선 — `제안서 효력 ·············· 242`. 점이 너무 길어 쪽번호가
       안 잡히므로 점선만으로 판정한다. 다만 **띄어쓰기 없이 이어진 점**만 센다.
       표 셀 구분자 ` · ` 를 잡으면 표가 다 날아간다.
@@ -354,6 +359,7 @@ def toc_lines(text, min_refs=1, max_chars=80):
         text: 청크 본문.
         min_refs: 한 줄에 쪽번호가 이만큼 있어야 목차 줄로 본다.
         max_chars: 이보다 긴 줄은 본문으로 본다. 목차 항목은 짧다.
+        many_refs: 쪽번호가 이만큼 모여 있으면 길이와 상관없이 목차 줄로 본다.
 
     Returns:
         줄마다 True/False 리스트.
@@ -362,10 +368,13 @@ def toc_lines(text, min_refs=1, max_chars=80):
     for line in text.split("\n"):
         stripped = line.strip()
         dotted = bool(_LEADER_DOTS.search(stripped))
-        numbered = (
-            len(_PAGE_REF.findall(stripped)) >= min_refs and len(stripped) <= max_chars
-        )
-        out.append(dotted or numbered)
+        # v3 전처리본은 목차를 한 줄로 이어 붙인다 —
+        # `- 추진개요\t3 - 추진방안\t5 - 추진일정\t7 …`. 길이로만 자르면
+        # 이게 전부 본문으로 통과한다. 쪽번호가 여럿 모인 줄은 길어도 목차다.
+        refs = len(_PAGE_REF.findall(stripped))
+        numbered = refs >= many_refs or (refs >= min_refs and len(stripped) <= max_chars)
+        sectioned = len(_SECTION_RUN.findall(stripped)) >= 3
+        out.append(dotted or numbered or sectioned)
     return out
 
 
@@ -382,6 +391,8 @@ def toc_ish(text, min_refs=4):
     flags = toc_lines(text)
     if any(_LEADER_DOTS.search(line) for line in lines):
         return True  # 점선 안내선은 그것만으로 충분하다
+    if any(len(_SECTION_RUN.findall(line)) >= 3 for line in lines):
+        return True  # 절 표시가 한 줄에 셋 이상이면 목차다
     return sum(len(_PAGE_REF.findall(line))
                for line, f in zip(lines, flags, strict=False) if f) >= min_refs
 
