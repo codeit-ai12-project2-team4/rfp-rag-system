@@ -166,6 +166,12 @@ class Splade:
     인덱스는 `cache` 이름을 주면 `outputs/vectorstore/` 에 저장했다가 다음
     실행에서 그대로 읽는다. 코퍼스 인코딩이 이 부품에서 제일 비싼 일이다.
 
+    ponytail: 코퍼스 전체를 한 번에 인코딩한다. 나라장터에서 매일 새 공고를
+    받는 배포에서는 새 청크만 붙여야 한다 — 수학적으로는 `np.vstack` 한 줄이다.
+    막고 있는 건 지문(`chunk_signature`)이 코퍼스 전체 해시라 한 개만 늘어도
+    전부 다시 만들게 되는 것이다. 증분이 필요해지면 지문을 chunk_id 집합으로
+    바꾸고 `add(chunks)` 를 붙인다.
+
     Attributes:
         k (int): 기본으로 돌려줄 청크 개수.
         chunks (list): 검색 대상 청크 리스트.
