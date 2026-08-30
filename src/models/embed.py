@@ -111,29 +111,57 @@ class OpenAIEmbeddings(Embeddings):
         dimensions: 주면 그 차원으로 줄여서 받는다 (3 계열만 지원).
     """
 
-    def __init__(self, model=None, batch_size=256, dimensions=None):
+    def __init__(self, model=None, batch_size=32, dimensions=None, max_chars=80_000):
         from openai import OpenAI
 
         self.client = OpenAI()
         self.model = model or EMBED_OPENAI_MODEL
         self.batch_size = batch_size
         self.dimensions = dimensions
+        # 요청 하나의 토큰 총량에도 한도가 있다. 청크 256개를 한 번에 보냈다가
+        # `Request too large for text-embedding-3-large` 로 죽었다.
+        # 개수만 세면 안 되고 **글자 수로도** 잘라야 한다.
+        self.max_chars = max_chars
 
     def _post(self, texts):
+        import time
+
         # 빈 문자열을 보내면 400 이 난다. 공백 하나로 바꿔 둔다.
         cleaned = [text if text.strip() else " " for text in texts]
         extra = {"dimensions": self.dimensions} if self.dimensions else {}
-        response = self.client.embeddings.create(
-            model=self.model, input=cleaned, **extra
-        )
-        return [item.embedding for item in response.data]
+        for attempt in range(6):
+            try:
+                response = self.client.embeddings.create(
+                    model=self.model, input=cleaned, **extra
+                )
+                return [item.embedding for item in response.data]
+            except Exception as error:  # 분당 한도(429)면 기다렸다 다시
+                if "429" not in str(error) or attempt == 5:
+                    raise
+                back = 15 * (attempt + 1)
+                print(f"  OpenAI 한도 — {back}초 쉬고 재시도    ", end="\r")
+                time.sleep(back)
+        raise RuntimeError("도달할 수 없음")
+
+    def _batches(self, texts):
+        """개수와 글자 수 **둘 다** 넘지 않게 잘라 낸다."""
+        batch, chars = [], 0
+        for text in texts:
+            if batch and (len(batch) >= self.batch_size
+                          or chars + len(text) > self.max_chars):
+                yield batch
+                batch, chars = [], 0
+            batch.append(text)
+            chars += len(text)
+        if batch:
+            yield batch
 
     def embed_documents(self, texts):
         vectors = []
-        for start in range(0, len(texts), self.batch_size):
-            vectors.extend(self._post(texts[start : start + self.batch_size]))
-            print(f"  임베딩 {min(start + self.batch_size, len(texts)):,}/{len(texts):,}",
-                  end="\r")
+        for batch in self._batches(texts):
+            vectors.extend(self._post(batch))
+            print(f"  임베딩 {len(vectors):,}/{len(texts):,}", end="\r")
+        print(" " * 40, end="\r")
         return vectors
 
     def embed_query(self, text):
