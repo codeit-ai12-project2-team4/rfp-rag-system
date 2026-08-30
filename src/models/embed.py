@@ -56,8 +56,27 @@ class TEIEmbeddings(Embeddings):
         # 질의 앞에 붙일 지시문. 빈 문자열이면 안 붙인다.
         self.instruct = EMBED_INSTRUCT if instruct is None else instruct
 
+    @property
+    def model_id(self):
+        """TEI 가 실제로 서빙 중인 모델 이름. `/info` 에 물어본다.
+
+        docker-compose 만 바꾸고 인덱스를 다시 안 만드는 사고가 세 번 났다.
+        `.env` 의 EMBED_MODEL 은 그때 같이 안 고쳐지므로 믿을 수 없다.
+        서버에 직접 묻는 게 유일하게 맞는 답이다.
+
+        Returns:
+            str: 모델 이름. 서버가 대답을 안 하면 EMBED_MODEL 을 쓴다.
+        """
+        if getattr(self, "_model_id", None) is None:
+            try:
+                got = requests.get(f"{self.url}/info", timeout=5).json()
+                self._model_id = got.get("model_id") or EMBED_MODEL
+            except Exception:
+                self._model_id = EMBED_MODEL
+        return self._model_id
+
     def _post(self, texts):
-        response = requests.post(
+        response = requests.post
             f"{self.url}/embed",
             json={"inputs": texts, "truncate": self.truncate},
             timeout=self.timeout,
