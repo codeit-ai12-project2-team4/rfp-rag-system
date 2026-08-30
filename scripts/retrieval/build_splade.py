@@ -15,6 +15,10 @@ TEI 의 splade pooling 은 ModernBert 를 지원하지 않는다:
 
     # 만들어진 것을 맥으로
     scp vm:~/rfp-rag-system/outputs/vectorstore/*__splade__*.npz outputs/vectorstore/
+
+**청크를 다시 자르면 이것도 다시 만들어야 한다.** 목차 제거는 줄 단위라
+청크 개수가 안 변해서(9,189개 그대로) 개수로는 못 잡는다. 본문 해시를 npz 에
+같이 넣어 두고 검색 쪽에서 대조한다.
 """
 
 import argparse
@@ -52,6 +56,7 @@ def main():
         batch_size=args.batch,
         max_length=args.max_length,
         cache=args.chunks,
+        refresh=True,  # 만드는 쪽이므로 청크가 바뀌었으면 다시 만든다
         verbose=True,
     )
     print("끝. outputs/vectorstore/ 의 npz 를 맥으로 옮기면 된다.")

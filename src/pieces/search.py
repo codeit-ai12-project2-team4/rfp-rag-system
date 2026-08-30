@@ -21,6 +21,7 @@ Hybrid  둘을 섞는다.             보통 이게 제일 낫다
 등수는 그런 문제가 없다. 60 은 관례값이고, 키우면 등수 차이가 덜 중요해진다.
 """
 
+import hashlib
 import os
 import time
 from collections import OrderedDict
@@ -132,6 +133,25 @@ class SpladeModel(Enum):
     JANG = "yjoonjang/splade-ko-v1"
 
 
+def chunk_signature(chunks):
+    """이 청크 묶음이 무엇인지 짧은 지문으로.
+
+    청크 이름은 그대로인데 내용만 바뀌는 일이 잦다 — 목차 제거는 **줄**을
+    지우므로 청크 개수가 안 변한다. 실제로 9,189개 그대로였다. 개수만 보면
+    못 잡으니 본문을 해시한다.
+
+    Args:
+        chunks: 청크 리스트.
+
+    Returns:
+        str: 12자리 지문.
+    """
+    digest = hashlib.md5()
+    for chunk in chunks:
+        digest.update(chunk.page_content.encode())
+    return digest.hexdigest()[:12]
+
+
 class Splade:
     """어휘 확장(Splade)으로 찾는 희소 검색기.
 
@@ -164,6 +184,7 @@ class Splade:
         max_length=1024,
         url=None,
         cache=None,
+        refresh=False,
         verbose=False,
     ):
         """모델을 올리고 청크를 인코딩한다. 캐시가 있으면 인코딩을 건너뛴다.
@@ -182,6 +203,9 @@ class Splade:
                 로컬에 모델을 안 올린다. "tei" 를 주면 기본 주소를 쓴다.
             cache (str, optional): 캐시 이름. 보통 청크 세트 이름을 준다.
                 주지 않으면 매번 코퍼스를 다시 인코딩한다.
+            refresh (bool): 캐시가 청크와 안 맞을 때 다시 만들지. 만드는 쪽
+                (`build_splade.py`)만 True 로 준다. 검색 쪽에서 True 로 두면
+                맥에서 코퍼스를 통째로 인코딩하게 된다.
             verbose (bool): 진행 상황 출력 여부.
         """
         self.k = k
@@ -201,12 +225,24 @@ class Splade:
             stem = f"{cache}__splade__{self.model_id.split('/')[-1]}"
             path = settings.VECTORSTORE / f"{stem}.npz"
 
+        signature = chunk_signature(self.chunks)
         if path and path.exists():
             saved = np.load(path)
-            self.idx, self.val = saved["idx"], saved["val"]
-            if verbose:
-                print(f"Splade 인덱스 재사용 {path.name}")
-            return
+            was = str(saved["signature"]) if "signature" in saved else "(없음)"
+            if was == signature:
+                self.idx, self.val = saved["idx"], saved["val"]
+                if verbose:
+                    print(f"Splade 인덱스 재사용 {path.name}")
+                return
+            if not refresh:
+                raise RuntimeError(
+                    f"Splade 인덱스가 지금 청크와 다릅니다: {path.name}\n"
+                    f"  만들 때  {was}\n"
+                    f"  지금     {signature}\n"
+                    "청크 개수가 같아도 내용이 바뀌면 못 씁니다. GPU 가 있는 곳에서\n"
+                    "다시 만들어 npz 를 가져오세요:\n"
+                    f"  python scripts/retrieval/build_splade.py --chunks {cache}"
+                )
 
         started = time.time()
         if verbose:
@@ -217,7 +253,9 @@ class Splade:
 
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(path, idx=self.idx, val=self.val)
+            np.savez_compressed(
+                path, idx=self.idx, val=self.val, signature=signature
+            )
 
     def _load(self):
         """모델과 토크나이저를 한 번만 올린다.
