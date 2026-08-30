@@ -159,7 +159,7 @@ class Splade:
         chunks,
         model=SpladeModel.PIXIE,
         k=5,
-        batch_size=16,
+        batch_size=8,
         top_terms=256,
         max_length=1024,
         url=None,
@@ -172,8 +172,8 @@ class Splade:
             chunks (iterable): page_content 를 가진 청크들.
             model (SpladeModel or str): 모델 Enum 또는 허깅페이스 ID.
             k (int): 기본 반환 개수. 기본값 5.
-            batch_size (int): 한 번에 인코딩할 청크 수. 기본값 16.
-                맥에서 열이 오르면 8 로 줄인다.
+            batch_size (int): 한 번에 인코딩할 청크 수. 기본값 8.
+                GPU 메모리가 모자라면 알아서 절반씩 줄여 다시 시도한다.
             top_terms (int): 문서당 남길 상위 낱말 수. 기본값 256.
             max_length (int): 자를 토큰 수. 기본값 1024.
                 512 로 두면 1,200자 청크의 뒤쪽 40%가 통째로 안 보인다.
@@ -242,6 +242,8 @@ class Splade:
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self._model = AutoModelForMaskedLM.from_pretrained(self.model_id)
         self._model.to(self._device).eval()  # 옮기는 건 여기 한 번뿐이다
+        if self._device == "cuda":
+            self._model.half()  # 로짓이 (묶음 x 토큰수 x 어휘수) 라 절반이 크다
         return self._tokenizer, self._model, self._device
 
     def _encode(self, texts, verbose=False):
@@ -264,32 +266,78 @@ class Splade:
         idx = np.zeros((len(texts), n), dtype=np.int32)
         val = np.zeros((len(texts), n), dtype=np.float32)
 
-        for at in range(0, len(texts), self.batch_size):
-            batch = texts[at : at + self.batch_size]
-            inputs = tokenizer(
-                batch,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.max_length,
-            ).to(device)
+        # 긴 글끼리 모아 자른다. 한 묶음은 그 안에서 제일 긴 글에 맞춰 패딩되므로,
+        # 섞여 있으면 300자짜리도 1,024 토큰으로 부풀어 그만큼 메모리를 쓴다.
+        order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))
+        batch_size = self.batch_size
+        done = 0
 
-            with torch.no_grad():
-                logits = model(**inputs).logits
+        while done < len(order):
+            picked = order[done : done + batch_size]
+            try:
+                top = self._forward([texts[i] for i in picked], tokenizer, model, device, n)
+            except getattr(torch, "OutOfMemoryError", torch.cuda.OutOfMemoryError):
+                if batch_size == 1:
+                    raise
+                batch_size = max(1, batch_size // 2)
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                print(f"  GPU 메모리 부족 — 묶음을 {batch_size} 로 줄인다")
+                continue
 
-            # Splade 핵심: log(1+relu(logits)) 를 문장 방향으로 max pooling
-            weights = torch.log1p(torch.relu(logits))
-            weights = weights * inputs.attention_mask.unsqueeze(-1)
-            pooled = weights.max(dim=1).values
+            for row, i in enumerate(picked):
+                idx[i] = top[0][row]
+                val[i] = top[1][row]
+            done += len(picked)
 
-            top = pooled.topk(n, dim=-1)  # 어차피 대부분 0 이라 상위만 남긴다
-            idx[at : at + len(batch)] = top.indices.cpu().numpy()
-            val[at : at + len(batch)] = top.values.cpu().numpy()
-
-            if verbose and at and at % (self.batch_size * 50) == 0:
-                print(f"  {at:,}/{len(texts):,}")
+            if verbose and done % (batch_size * 50) < batch_size:
+                print(f"  {done:,}/{len(texts):,}")
 
         return idx, val
+
+    def _forward(self, batch, tokenizer, model, device, n):
+        """한 묶음을 인코딩해 상위 n 개 (칸번호, 값) 을 돌려준다.
+
+        메모리가 여기서 갈린다. MLM 머리는 `(묶음, 토큰수, 어휘수)` 를 뱉는데
+        32 x 1024 x 50,368 이면 float32 로 **6.6GB** 다. 여기에
+        `log1p(relu(...))` 와 마스크 곱을 차례로 하면 사본이 셋이 되어 20GB 가
+        된다. 실제로 그렇게 죽었다.
+
+        `log1p(relu(x))` 는 단조증가라 **max pooling 을 먼저 해도 결과가 같다.**
+        먼저 `(묶음, 어휘수)` 로 줄이고 나서 계산하면 사본이 안 생긴다.
+
+        Args:
+            batch (list[str]): 한 묶음의 텍스트.
+            tokenizer: 토크나이저.
+            model: MLM 모델.
+            device (str): 연산 장치.
+            n (int): 남길 상위 낱말 수.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: (칸번호, 값). 각각 (묶음, n) 모양.
+        """
+        import torch
+
+        inputs = tokenizer(
+            batch,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+        ).to(device)
+
+        with torch.inference_mode():
+            logits = model(**inputs).logits
+            # 패딩 자리가 max 를 이기지 못하게 눌러 둔다. 제자리 연산이라 사본이 없다
+            logits.masked_fill_(inputs.attention_mask.unsqueeze(-1) == 0, -1e4)
+            pooled = logits.max(dim=1).values  # 여기서 (묶음, 어휘수) 로 줄어든다
+            del logits
+            pooled = torch.log1p(torch.relu(pooled))
+            top = pooled.topk(n, dim=-1)  # 어차피 대부분 0 이라 상위만 남긴다
+            return (
+                top.indices.cpu().numpy(),
+                top.values.float().cpu().numpy(),
+            )
 
     def _encode_tei(self, texts, verbose=False):
         """인코딩을 TEI 에 맡긴다. `/embed_sparse` 는 (칸번호, 값) 쌍만 돌려준다.

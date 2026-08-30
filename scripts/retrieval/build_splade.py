@@ -18,8 +18,12 @@ TEI 의 splade pooling 은 ModernBert 를 지원하지 않는다:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+# 조각난 메모리 때문에 큰 덩어리를 못 잡는 일을 줄인다. torch 를 부르기 전에 둬야 한다.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
@@ -33,7 +37,8 @@ def main():
     parser.add_argument("--chunks", required=True, help="outputs/chunks 의 청크 이름")
     parser.add_argument("--model", default=SpladeModel.PIXIE.value)
     parser.add_argument(
-        "--batch", type=int, default=32, help="GPU 면 32, 맥이면 8 로 줄인다"
+        "--batch", type=int, default=8,
+        help="한 묶음 크기. 메모리가 모자라면 알아서 절반씩 줄인다"
     )
     parser.add_argument(
         "--max-length", type=int, default=1024, help="자를 토큰 수"
