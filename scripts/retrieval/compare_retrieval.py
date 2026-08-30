@@ -45,9 +45,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))  # 평평한 import: chunking, preprocessing …
 sys.path.insert(0, str(ROOT))  # config.settings
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # build_evalset
 
 import pandas as pd
 
+import build_evalset
 import chunking
 import evaluation as ev
 from config import settings
@@ -307,6 +309,13 @@ def main():
     )
     parser.add_argument("--out", default=str(settings.EVAL_RESULTS / "retrieval.csv"))
     args = parser.parse_args()
+
+    # 청크가 바뀌었으면 평가 세트를 먼저 다시 만든다. 청크를 다시 자르면 정답
+    # 문자열이 사라지는 문항이 생기고, 그게 "검색 실패" 로 잡혀 성능 저하로
+    # 오독된다. v2 때 그걸로 하루를 썼다. 손으로 만든 세트는 안 건드린다.
+    build_evalset.ensure(
+        f"{args.evalset}.json", args.chunks, chunking.load_chunks(args.chunks)
+    )
 
     try:
         pairs = ev.load_evalset(args.evalset)

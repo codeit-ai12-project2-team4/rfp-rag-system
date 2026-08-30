@@ -32,6 +32,7 @@ from evaluation import fit_budget, load_evalset
 from evaluation.evalset import matches
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # compare_retrieval 재사용
+import build_evalset
 from compare_retrieval import build_setups
 
 
@@ -150,6 +151,7 @@ def main():
         args.splade_model = SpladeModel.PIXIE.value
 
     chunks = chunking.load_chunks(args.chunks)
+    build_evalset.ensure(f"{args.evalset}.json", args.chunks, chunks)
     setups, _ = build_setups(args)
     for name in (args.a, args.b):
         if name and name not in setups:

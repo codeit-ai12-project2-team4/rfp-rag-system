@@ -35,6 +35,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 import chunking  # noqa: E402
 from config import settings  # noqa: E402
+from pieces.search import chunk_signature  # noqa: E402
 
 SOURCES = ["eval_qa_80.json", "eval_qa_gen.json", "eval_qa_notitle.json"]
 
@@ -96,28 +97,25 @@ def owners(chunks):
     return joined
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--chunks", required=True, help="대조할 청크 이름")
-    parser.add_argument("--sources", nargs="+", default=SOURCES)
-    parser.add_argument("--out", default="eval_qa_merged.json")
-    parser.add_argument(
-        "--keep-ambiguous",
-        action="store_true",
-        help="여러 공고에 걸리는 문항도 남긴다",
-    )
-    args = parser.parse_args()
+def build(chunks, sources=None, keep_ambiguous=False, verbose=True):
+    """세트들을 합치고 채점 안 되는 문항을 거른다.
 
-    chunks = chunking.load_chunks(args.chunks)
-    print(f"청크 {len(chunks):,}개로 대조합니다")
+    Args:
+        chunks: 대조할 청크 리스트.
+        sources (list[str], optional): 합칠 파일 이름들. 없으면 `SOURCES`.
+        keep_ambiguous (bool): 여러 공고에 걸리는 문항도 남길지.
+        verbose (bool): 진행 상황을 찍을지.
+
+    Returns:
+        tuple[list[dict], Counter]: 남은 문항들과 버린 사유별 개수.
+    """
     bodies = owners(chunks)
-    print(f"공고 {len(bodies)}건")
-
     rows = []
-    for name in args.sources:
+    for name in sources or SOURCES:
         got = load(name)
         rows.extend(got)
-        print(f"  {name}: {len(got)}문항")
+        if verbose:
+            print(f"  {name}: {len(got)}문항")
 
     kept, seen, dropped = [], set(), Counter()
     for row in rows:
@@ -131,7 +129,6 @@ def main():
             dropped["중복질문"] += 1
             continue
 
-        # 정답이 실제로 들어 있는 공고들을 모은다
         found = set()
         for keyword in keywords:
             needle = squeeze(keyword)
@@ -147,22 +144,117 @@ def main():
         if row.get("doc_id") not in found:
             dropped["라벨불일치"] += 1
             continue
-        if len(found) > 1 and not args.keep_ambiguous:
+        if len(found) > 1 and not keep_ambiguous:
             dropped["공고특정불가"] += 1
             continue
 
         seen.add(question)
         kept.append(row)
+    return kept, dropped
 
-    out = settings.DATA / args.out
-    out.write_text(json.dumps(kept, ensure_ascii=False, indent=2))
 
-    print(f"\n{len(rows)}문항 → {len(kept)}문항 ({out.name})")
-    for reason, count in dropped.most_common():
-        print(f"  버림 {reason:12s} {count}")
-    print("\n유형별")
-    for kind, count in Counter(r.get("type") for r in kept).most_common():
-        print(f"  {kind or '없음':10s} {count}")
+def save(kept, dropped, out, chunks_name, signature, verbose=True):
+    """결과와 함께 **어느 청크로 만든 세트인지** 옆에 적어 둔다.
+
+    Args:
+        kept (list[dict]): 남은 문항들.
+        dropped (Counter): 버린 사유별 개수.
+        out (str): `data/` 아래 저장할 파일 이름.
+        chunks_name (str): 대조에 쓴 청크 이름.
+        signature (str): 그 청크의 지문.
+        verbose (bool): 요약을 찍을지.
+
+    Returns:
+        Path: 저장한 경로.
+    """
+    path = settings.DATA / out
+    path.write_text(json.dumps(kept, ensure_ascii=False, indent=2))
+    meta(out).write_text(
+        json.dumps(
+            {
+                "chunks": chunks_name,
+                "signature": signature,
+                "문항수": len(kept),
+                "버림": dict(dropped),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    if verbose:
+        print(f"\n{len(kept) + sum(dropped.values())}문항 → {len(kept)}문항 ({path.name})")
+        for reason, count in dropped.most_common():
+            print(f"  버림 {reason:12s} {count}")
+        print("\n유형별")
+        for kind, count in Counter(r.get("type") for r in kept).most_common():
+            print(f"  {kind or '없음':10s} {count}")
+    return path
+
+
+def meta(out):
+    """평가 세트 옆에 두는 도장 파일 경로.
+
+    Args:
+        out (str): 평가 세트 파일 이름.
+
+    Returns:
+        Path: 도장 파일 경로.
+    """
+    return settings.DATA / f"{Path(out).stem}.meta.json"
+
+
+def ensure(out, chunks_name, chunks, verbose=True):
+    """청크가 바뀌었으면 평가 세트를 다시 만든다.
+
+    청크를 다시 자르면 정답 문자열이 사라지는 문항이 생긴다. 세트를 그대로 두면
+    그게 "검색 실패" 로 잡혀서 **성능 저하로 오독하게 된다.** 실제로 v2 때
+    그렇게 하루를 썼다. 사람이 기억할 일이 아니라 코드가 볼 일이다.
+
+    손으로 만든 세트(도장이 없는 것)는 건드리지 않는다.
+
+    Args:
+        out (str): 평가 세트 파일 이름. 예: `eval_qa_merged.json`.
+        chunks_name (str): 지금 쓰는 청크 이름.
+        chunks: 지금 쓰는 청크 리스트.
+        verbose (bool): 진행 상황을 찍을지.
+
+    Returns:
+        bool: 다시 만들었으면 True.
+    """
+    stamp = meta(out)
+    if not stamp.exists():
+        return False  # 자동 관리 대상이 아니다
+
+    was = json.loads(stamp.read_text())
+    now = chunk_signature(chunks)
+    if was.get("signature") == now and was.get("chunks") == chunks_name:
+        return False
+
+    print(f"\n청크가 바뀌었습니다 — {out} 를 다시 만듭니다")
+    print(f"  만들 때  {was.get('chunks')} / {was.get('signature')}")
+    print(f"  지금     {chunks_name} / {now}")
+    kept, dropped = build(chunks, verbose=verbose)
+    save(kept, dropped, out, chunks_name, now, verbose=verbose)
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--chunks", required=True, help="대조할 청크 이름")
+    parser.add_argument("--sources", nargs="+", default=SOURCES)
+    parser.add_argument("--out", default="eval_qa_merged.json")
+    parser.add_argument(
+        "--keep-ambiguous",
+        action="store_true",
+        help="여러 공고에 걸리는 문항도 남긴다",
+    )
+    args = parser.parse_args()
+
+    chunks = chunking.load_chunks(args.chunks)
+    print(f"청크 {len(chunks):,}개로 대조합니다")
+    kept, dropped = build(chunks, args.sources, args.keep_ambiguous)
+    save(kept, dropped, args.out, args.chunks, chunk_signature(chunks))
+
     print("\n출처별")
     for name, count in Counter(r["source"] for r in kept).most_common():
         print(f"  {name:24s} {count}")
