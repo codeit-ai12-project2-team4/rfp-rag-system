@@ -139,6 +139,11 @@ def main():
     parser.add_argument("--no-rerank", action="store_true")
     parser.add_argument("--bm25-weights", default=[0.7])
     args = parser.parse_args()
+
+    # --a/--b 에 Splade 가 들어 있으면 알아서 켠다. --splade 를 따로 요구하면
+    # "그런 설정이 없습니다" 만 보고 왜 없는지 알 수가 없다.
+    if any("Splade" in (name or "") for name in (args.a, args.b)):
+        args.splade = True
     if args.splade_model is None:
         from pieces import SpladeModel
 
@@ -148,7 +153,10 @@ def main():
     setups, _ = build_setups(args)
     for name in (args.a, args.b):
         if name and name not in setups:
-            sys.exit(f"그런 설정이 없습니다: {name}\n  있는 것: {', '.join(setups)}")
+            sys.exit(
+                f"그런 설정이 없습니다: {name}\n"
+                f"  있는 것: {', '.join(setups)}"
+            )
 
     pairs = [p for p in load_evalset(args.evalset) if p.get("answerable", True)]
     if args.type != "all":
