@@ -15,10 +15,17 @@ from langchain_core.embeddings import Embeddings
 # 팀 공용 JupyterHub 가 도는 VM 에서는 이 포트를 절대 쓰면 안 된다.
 TEI_EMBED_URL = os.environ.get("TEI_EMBED_URL", "http://localhost:8085")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "dragonkue/BGE-m3-ko")
-# Qwen3-Embedding 같은 인스트럭션 튜닝 모델은 **질의에만** 지시문을 붙여야
-# 제 성능이 나온다. 문서 쪽은 그냥 넣는다. 그래서 인덱스를 다시 안 만들어도 된다.
-# BGE-m3 는 이런 게 없으므로 기본값은 꺼 둔다.
-EMBED_INSTRUCT = os.environ.get("EMBED_INSTRUCT", "")
+# 요즘 임베딩 모델은 질의와 문서에 **서로 다른 접두어**를 요구한다. 안 붙이면
+# 오류 없이 성능만 깎여서, 모델이 나쁜 줄 알고 버리게 된다. 두 번 당했다.
+#
+#     arctic-embed-ko    질의 "query: "                    문서 없음
+#     embeddinggemma     질의 "task: search result | query: "  문서 "title: none | text: "
+#     BGE-m3             둘 다 없음
+#
+# 질의 접두어는 검색할 때 붙으므로 바꿔도 재인덱싱이 필요 없다. **문서 접두어는
+# 인덱싱 시점에 들어가므로 바꾸면 인덱스를 다시 만들어야 한다.**
+EMBED_QUERY_PREFIX = os.environ.get("EMBED_QUERY_PREFIX", "")
+EMBED_DOC_PREFIX = os.environ.get("EMBED_DOC_PREFIX", "")
 # 시나리오 B — API 임베딩. GPU 를 안 굽는 대신 호출당 돈이 든다.
 # 청크 9,200개(약 370만 토큰) 기준 3-small $0.07, 3-large $0.48 이다.
 EMBED_OPENAI_MODEL = os.environ.get("EMBED_OPENAI_MODEL", "text-embedding-3-large")
@@ -47,14 +54,16 @@ class TEIEmbeddings(Embeddings):
         batch_size=32,
         timeout=120,
         truncate=True,
-        instruct=None,
+        query_prefix=None,
+        doc_prefix=None,
     ):
         self.url = url.rstrip("/")
         self.batch_size = batch_size
         self.timeout = timeout
         self.truncate = truncate
-        # 질의 앞에 붙일 지시문. 빈 문자열이면 안 붙인다.
-        self.instruct = EMBED_INSTRUCT if instruct is None else instruct
+        # 빈 문자열이면 안 붙인다.
+        self.query_prefix = EMBED_QUERY_PREFIX if query_prefix is None else query_prefix
+        self.doc_prefix = EMBED_DOC_PREFIX if doc_prefix is None else doc_prefix
 
     @property
     def model_id(self):
@@ -76,7 +85,7 @@ class TEIEmbeddings(Embeddings):
         return self._model_id
 
     def _post(self, texts):
-        response = requests.post
+        response = requests.post(
             f"{self.url}/embed",
             json={"inputs": texts, "truncate": self.truncate},
             timeout=self.timeout,
@@ -90,19 +99,21 @@ class TEIEmbeddings(Embeddings):
 
     def embed_documents(self, texts):
         vectors = []
+        if self.doc_prefix:
+            texts = [self.doc_prefix + text for text in texts]
         for start in range(0, len(texts), self.batch_size):
             vectors.extend(self._post(texts[start : start + self.batch_size]))
         return vectors
 
     def embed_query(self, text):
-        """질의를 벡터로. 인스트럭션 모델이면 지시문을 앞에 붙인다.
+        """질의를 벡터로. `EMBED_QUERY_PREFIX` 를 앞에 붙인다.
 
-        `embed_documents` 는 안 붙인다. Qwen3-Embedding 계열이 그렇게 학습됐고,
-        문서 쪽을 안 건드리니 **인덱스를 다시 만들 필요가 없다.**
+        문서 쪽은 `embed_documents` 가 `EMBED_DOC_PREFIX` 를 따로 붙인다.
+        모델마다 요구하는 접두어가 다르고 질의·문서가 다른 경우가 많다.
+        질의 접두어만 바꾸면 재인덱싱이 필요 없지만, **문서 접두어를 바꾸면
+        인덱스를 다시 만들어야 한다.**
         """
-        if self.instruct:
-            text = f"Instruct: {self.instruct}\nQuery: {text}"
-        return self._post([text])[0]
+        return self._post([self.query_prefix + text])[0]
 
     def health(self):
         """서버가 살아 있는지, 어떤 모델인지 확인한다."""
@@ -111,7 +122,8 @@ class TEIEmbeddings(Embeddings):
             "model": info.get("model_id"),
             "max_input_length": info.get("max_input_length"),
             "dim": len(self.embed_query("확인")),
-            "instruct": self.instruct or "(없음)",
+            "질의 접두어": self.query_prefix or "(없음)",
+            "문서 접두어": self.doc_prefix or "(없음)",
         }
 
 
