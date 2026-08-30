@@ -1,28 +1,40 @@
 #!/usr/bin/env python
 """검색 방법을 비교한다. BM25 · Dense · Hybrid · Rerank 를 한 표로.
 
-    python scripts/compare_retrieval.py --chunks cleaned_documents__recursive_3000_400
-    python scripts/compare_retrieval.py --chunks ... --embed fake     서버 없이 배관 확인
+    python scripts/retrieval/compare_retrieval.py --chunks cleaned_documents_v3__recursive_1200_200
+    python scripts/retrieval/compare_retrieval.py --chunks ... --splade
+    python scripts/retrieval/compare_retrieval.py --chunks ... --embed fake   서버 없이 배관 확인
 
-청킹은 `compare_chunking.py` 로 이미 골랐다는 전제다. 여기서는 **자르기를 고정하고
-검색 방법만 바꾼다.**
+청킹은 고정하고 **검색 방법만** 바꾼다.
 
 ## 무엇을 비교하나
 
-    BM25            키워드. 형태소 분석해서 단어가 겹치는 걸 찾는다
-    Dense           임베딩. 뜻이 비슷한 걸 찾는다
-    Dense+머리말     청크 앞에 [사업명] 을 붙인 인덱스. 임베딩에는 도움이 된다
-    Hybrid          BM25 + Dense 를 RRF(순위 융합)로 합친다
-    Hybrid+Rerank   합친 뒤 크로스 인코더로 등수를 다시 매긴다
+    BM25                키워드. 형태소를 갈라 단어가 겹치는 걸 찾는다
+    Dense               임베딩. 뜻이 비슷한 걸 찾는다
+    Splade              어휘 확장. 문서에 안 적힌 낱말까지 가중치를 붙인다
+    Hybrid              BM25 + Dense 를 RRF(순위 융합)로 합친다
+    Hybrid(BM25+Splade) Dense 를 안 쓴다. 인덱스도 서버도 없이 1.4초
+    …+Rerank            합친 뒤 크로스 인코더로 등수를 다시 매긴다
+    용어추가+…            질의에 공문 용어를 덧붙인다 (사전만, LLM 없이)
 
 ## 무엇을 보나
 
 **리랭커는 적중률이 아니라 등수를 올리는 부품이다.** 적중률이 그대로여도 MRR 이
 오르면 일한 것이다. 반대로 MRR 만 보면 재현율이 떨어지는 걸 놓친다. 둘 다 본다.
 
-머리말은 검색기마다 반대로 작용한다. BM25 에서는 한 공고의 모든 청크가
-같은 사업명을 갖게 되어 구별을 못 하고, Dense 에서는 맥락이 붙어 벡터가 좋아진다.
-그래서 Dense 만 머리말 인덱스를 따로 쓴다.
+**리랭커가 후보를 다 지우는 구간이 있다.** 쉬운 평가 세트에서는 상류를 뭘 바꿔도
+최종 성적이 바이트 단위로 같았다. pool 30 안에 정답이 늘 있으면 리랭커가
+처음부터 다시 줄을 세우기 때문이다. 상류 실험이 의미를 가지려면 평가 세트가
+충분히 어려워야 한다.
+
+## 여기서 뺀 것들 (결론이 났다)
+
+    머리말 계열     내 평가 세트가 질문의 100%를 사업명으로 시작해서 생긴 착시였다
+    Widen          뒤 청크 붙이기. 세 유형 모두에서 졌다
+    Dense+Splade   BM25+Splade 에 전부 지고 3배 느리다
+    BM25 0.3       0.5 와 구분이 안 됐다. 0.7 만 남긴다
+
+전 과정은 `docs/시행착오.md`.
 """
 
 import argparse
@@ -30,7 +42,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))  # 평평한 import: chunking, preprocessing …
 sys.path.insert(0, str(ROOT))  # config.settings
 
@@ -49,7 +61,6 @@ from pieces import (
     Rerank,
     Splade,
     SpladeModel,
-    Widen,
 )
 from preprocessing import load_documents
 from vectorstore import list_stores, load_store
@@ -112,26 +123,12 @@ def build_setups(args):
         searchers.append(splade)
         setups["Splade"] = lambda q: splade.search(q, args.pool)
 
-    # 머리말 인덱스가 있으면 같이 잰다
-    head_index = f"{args.chunks}__header__{args.embed}"
-    head_dense = None
-    if head_index in list_stores():
-        head_dense = Dense(load_store(head_index, embedder), k=args.pool)
-        searchers.append(head_dense)
-        setups["Dense+머리말"] = lambda q: head_dense.search(q, args.pool)
-        head_hybrid = Hybrid([head_dense, bm25], k=args.pool, pool=args.pool)
-        setups["Hybrid+머리말"] = lambda q: head_hybrid.search(q, args.pool)
-    else:
-        print(f"  ({head_index} 가 없어 머리말 비교는 건너뜁니다)")
-
     # Splade 를 섞는 두 가지. 방법 A 는 어휘 매칭 + 어휘 확장, 방법 B 는
     # 뜻(Dense) + 어휘 확장이다.
-    bm25_splade = dense_splade = None
+    bm25_splade = None
     if splade is not None:
         bm25_splade = Hybrid([bm25, splade], weights=[0.4, 0.6], k=args.pool, pool=args.pool)
         setups["Hybrid(BM25+Splade)"] = lambda q: bm25_splade.search(q, args.pool)
-        dense_splade = Hybrid([dense, splade], weights=[0.5, 0.5], k=args.pool, pool=args.pool)
-        setups["Hybrid(Dense+Splade)"] = lambda q: dense_splade.search(q, args.pool)
 
     if not args.no_rerank:
         # Rerank 는 부품이라 Pipeline 에 끼워서 쓴다. 직접 구현하지 않는다.
@@ -164,26 +161,10 @@ def build_setups(args):
 
         # Splade 조합을 리랭커에 태운다. 후보를 만드는 쪽이 바뀌면 리랭커가
         # 볼 30개가 바뀌므로, 리랭커 없이 잰 순위는 그대로 가지 않는다.
-        for label, mixer in (("Hybrid(BM25+Splade)", bm25_splade),
-                             ("Hybrid(Dense+Splade)", dense_splade)):
-            if mixer is None:
-                continue
-            pipe = Pipeline([mixer, Rerank(reranker, k=args.pool)])
-            setups[f"{label}+Rerank"] = (lambda p: lambda q: p(q).chunks)(pipe)
+        if bm25_splade is not None:
+            pipe = Pipeline([bm25_splade, Rerank(reranker, k=args.pool)])
+            setups["Hybrid(BM25+Splade)+Rerank"] = lambda q: pipe(q).chunks
 
-        if head_dense is not None:
-            head_rr = Pipeline([head_dense, Rerank(reranker, k=args.pool)])
-            setups["Dense+머리말+Rerank"] = lambda q: head_rr(q).chunks
-
-            # 정답이 청크 경계에서 갈리는 일이 있다. 겹침 200자로는 모자랐다 —
-            # "□ 입찰 참가자격 ○ … 다음 요건을 모두 갖춘 사업자" 에서 끊기고
-            # 실제 요건 목록은 다음 청크에 있었다. 뒤 청크를 붙여 본다.
-            wide = Pipeline([
-                head_dense,
-                Rerank(reranker, k=max(args.pool // 6, 3)),
-                Widen(chunks, before=0, after=1, max_total=args.pool),
-            ])
-            setups["Dense+머리말+Rerank+Widen"] = lambda q: wide(q).chunks
 
     return setups, searchers
 
@@ -282,7 +263,7 @@ def main():
     )
     parser.add_argument(
         "--bm25-weights",
-        default="0.3,0.5,0.7",
+        default="0.7",
         type=lambda s: [float(x) for x in s.split(",")],
         help="Hybrid 의 BM25 비중들. 쉼표로 구분",
     )
