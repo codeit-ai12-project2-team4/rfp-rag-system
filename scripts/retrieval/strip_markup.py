@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]  # scripts/retrieval/ 아래다
 DEFAULT_SRC = "cleaned_documents_v2-1"
 DEFAULT_DST = "cleaned_documents_v3"
 

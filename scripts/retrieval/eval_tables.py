@@ -38,7 +38,7 @@ import unicodedata
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]  # scripts/retrieval/ 아래다
 sys.path.insert(0, str(ROOT / "src"))   # 평평한 import: chunking, preprocessing …
 sys.path.insert(0, str(ROOT))           # config.settings
 
