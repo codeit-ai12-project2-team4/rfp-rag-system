@@ -7,6 +7,8 @@
 #
 #     bash scripts/retrieval/overnight.sh
 #
+# 출력을 /dev/null 로 보내지 마세요. 사전 점검이 왜 멈췄는지 여기서만 나옵니다.
+#
 # pool 이 커지면 리랭커가 그만큼 더 많은 후보를 채점하므로 시간이 거의 비례한다.
 # 30/50/80/120 이면 대략 10 + 17 + 27 + 40 = 95분쯤 걸린다.
 
@@ -37,13 +39,15 @@ esac
 python - <<'PY' || exit 1
 import sys
 sys.path[:0] = ["src", "."]
+from config import settings  # noqa: F401  — 먼저 불러야 .env 가 올라간다
 from models import load_embedder
 
 health = load_embedder("tei").health()
 print(f"  질의 접두어  {health['질의 접두어']}")
 print(f"  문서 접두어  {health['문서 접두어']}")
 if health["질의 접두어"] == "(없음)":
-    print("  !! arctic 은 'query: ' 가 필요합니다. .env 의 EMBED_QUERY_PREFIX 를 보세요")
+    print("  !! arctic 은 'query: ' 가 필요합니다.")
+    print('     .env 에  EMBED_QUERY_PREFIX="query: "  — 따옴표 없으면 뒤 공백이 날아갑니다')
     sys.exit(1)
 PY
 
@@ -106,3 +110,4 @@ PY
 
 echo ""
 echo "끝났습니다. $LOG"
+
