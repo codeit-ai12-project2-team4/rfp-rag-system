@@ -129,6 +129,7 @@ typing-extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.7.0
 uuid-utils==0.17.0
+fastapi
 uvicorn==0.52.4
 wcwidth==0.8.2
 websockets==17.0.1
