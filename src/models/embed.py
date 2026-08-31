@@ -24,8 +24,19 @@ EMBED_MODEL = os.environ.get("EMBED_MODEL", "dragonkue/BGE-m3-ko")
 #
 # 질의 접두어는 검색할 때 붙으므로 바꿔도 재인덱싱이 필요 없다. **문서 접두어는
 # 인덱싱 시점에 들어가므로 바꾸면 인덱스를 다시 만들어야 한다.**
-EMBED_QUERY_PREFIX = os.environ.get("EMBED_QUERY_PREFIX", "")
-EMBED_DOC_PREFIX = os.environ.get("EMBED_DOC_PREFIX", "")
+# **import 시점에 읽으면 안 된다.** `.env` 를 올리는 건 `config/settings.py` 인데,
+# 이 모듈이 먼저 import 되면 값이 빈 문자열로 굳어 버린다. 조용히 접두어 없이
+# 돌아간다. 그래서 객체를 만들 때 읽는다.
+def _prefix(name):
+    """접두어를 지금 읽는다. 뒤 공백이 의미를 갖는 값이라 손대지 않는다.
+
+    Args:
+        name (str): 환경변수 이름.
+
+    Returns:
+        str: 접두어. 없으면 빈 문자열.
+    """
+    return os.environ.get(name, "")
 # 시나리오 B — API 임베딩. GPU 를 안 굽는 대신 호출당 돈이 든다.
 # 청크 9,200개(약 370만 토큰) 기준 3-small $0.07, 3-large $0.48 이다.
 EMBED_OPENAI_MODEL = os.environ.get("EMBED_OPENAI_MODEL", "text-embedding-3-large")
@@ -62,8 +73,12 @@ class TEIEmbeddings(Embeddings):
         self.timeout = timeout
         self.truncate = truncate
         # 빈 문자열이면 안 붙인다.
-        self.query_prefix = EMBED_QUERY_PREFIX if query_prefix is None else query_prefix
-        self.doc_prefix = EMBED_DOC_PREFIX if doc_prefix is None else doc_prefix
+        self.query_prefix = (
+            _prefix("EMBED_QUERY_PREFIX") if query_prefix is None else query_prefix
+        )
+        self.doc_prefix = (
+            _prefix("EMBED_DOC_PREFIX") if doc_prefix is None else doc_prefix
+        )
 
     @property
     def model_id(self):
@@ -122,8 +137,9 @@ class TEIEmbeddings(Embeddings):
             "model": info.get("model_id"),
             "max_input_length": info.get("max_input_length"),
             "dim": len(self.embed_query("확인")),
-            "질의 접두어": self.query_prefix or "(없음)",
-            "문서 접두어": self.doc_prefix or "(없음)",
+            # 대괄호로 감싼다. `query:` 와 `query: ` 는 다른 값인데 눈으로 구분이 안 된다
+            "질의 접두어": f"[{self.query_prefix}]" if self.query_prefix else "(없음)",
+            "문서 접두어": f"[{self.doc_prefix}]" if self.doc_prefix else "(없음)",
         }
 
 
