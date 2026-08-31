@@ -59,7 +59,7 @@ def main():
         cells = []
         for kind in kinds:
             x, y = left.loc[setup, kind], right.loc[setup, kind]
-            mark = "<" if x > y else (">" if y > x else "=")
+            mark = ">" if x > y else ("<" if y > x else "=")
             wins[name_a if x > y else name_b if y > x else "동률"] += 1
             cells.append(f"{x:.3f} {mark} {y:.3f}".center(20))
         print(setup.ljust(28) + "".join(cells))
