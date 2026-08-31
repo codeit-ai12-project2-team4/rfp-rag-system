@@ -221,6 +221,23 @@ def fit_context(chunks, budget=None):
     return kept
 
 
+def _drop_nan(row):
+    """dict 안의 NaN 을 None 으로 바꾼다.
+
+    메타데이터가 pandas 에서 와서 값이 비면 float('nan') 이 섞여 나온다.
+    Starlette 의 JSONResponse 는 `allow_nan=False` 라 NaN 하나에 응답 전체가
+    끊긴다. 500 도 아니고 연결이 그냥 끊겨서 브라우저에는 "Failed to fetch"
+    로만 보인다 — 원인을 찾는 데 한참 걸린다.
+
+    Args:
+        row: 메타데이터에서 만든 dict.
+
+    Returns:
+        NaN 자리가 None 으로 바뀐 새 dict.
+    """
+    return {k: None if isinstance(v, float) and v != v else v for k, v in row.items()}
+
+
 def _passes(row, min_budget, max_budget, agency, closes_after):
     """공고 하나가 조건을 통과하는지.
 
@@ -245,6 +262,22 @@ def _passes(row, min_budget, max_budget, agency, closes_after):
     if closes_after and str(row.get("bid_close_at") or "") < closes_after:  # noqa
         return False
     return True
+
+
+def _plain(value):
+    """JSON 으로 나갈 수 있는 값으로 바꾼다.
+
+    예산이 없는 공고가 있어서 `budget` 이 NaN 으로 온다. 파이썬 `json` 은
+    기본으로 NaN 을 통과시키지만 **Starlette 은 `allow_nan=False`** 라
+    ValueError 로 죽는다. 응답을 만드는 중이라 스택만 남고 원인이 안 보인다.
+
+    Args:
+        value: 메타데이터 값.
+
+    Returns:
+        NaN 이면 None, 아니면 그대로.
+    """
+    return None if isinstance(value, float) and value != value else value
 
 
 def search_notices(
@@ -316,17 +349,19 @@ def search_notices(
         doc_id = meta.get("doc_id")
         row = found.get(doc_id)
         if row is None:
-            row = found[doc_id] = {
-                "doc_id": doc_id,
-                "title": meta.get("title"),
-                "agency": meta.get("agency"),
-                "budget": meta.get("budget"),
-                "bid_close_at": meta.get("bid_close_at"),
-                "summary": meta.get("summary"),
-                "score": 0.0,
-                "청크수": 0,
-                "excerpt": " ".join(chunk.page_content.split())[:200],
-            }
+            row = found[doc_id] = _drop_nan(
+                {
+                    "doc_id": doc_id,
+                    "title": _plain(meta.get("title")),
+                    "agency": _plain(meta.get("agency")),
+                    "budget": _plain(meta.get("budget")),
+                    "bid_close_at": _plain(meta.get("bid_close_at")),
+                    "summary": _plain(meta.get("summary")),
+                    "score": 0.0,
+                    "청크수": 0,
+                    "excerpt": " ".join(chunk.page_content.split())[:200],
+                }
+            )
         row["score"] += 1.0 / (60 + rank)  # RRF. 상수 60 은 관례값
         row["청크수"] += 1
 
@@ -366,13 +401,15 @@ def sources(chunks):
         `[{"n", "doc_id", "title", "agency", "chunk_id"}]`. 번호는 1부터.
     """
     return [
-        {
-            "n": i,
-            "doc_id": chunk.metadata.get("doc_id"),
-            "title": chunk.metadata.get("title"),
-            "agency": chunk.metadata.get("agency"),
-            "chunk_id": chunk.metadata.get("chunk_id"),
-        }
+        _drop_nan(
+            {
+                "n": i,
+                "doc_id": chunk.metadata.get("doc_id"),
+                "title": chunk.metadata.get("title"),
+                "agency": chunk.metadata.get("agency"),
+                "chunk_id": chunk.metadata.get("chunk_id"),
+            }
+        )
         for i, chunk in enumerate(chunks, 1)
     ]
 
