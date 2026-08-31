@@ -240,7 +240,13 @@ def ensure(out, chunks_name, chunks, verbose=True):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--chunks", required=True, help="대조할 청크 이름")
+    parser.add_argument(
+        "--chunks",
+        required=True,
+        nargs="+",
+        help="대조할 청크 이름. 여럿 주면 **전부에서** 채점되는 문항만 남긴다 — "
+        "코퍼스끼리 비교할 때는 반드시 그렇게 해야 한다",
+    )
     parser.add_argument("--sources", nargs="+", default=SOURCES)
     parser.add_argument("--out", default="eval_qa_merged.json")
     parser.add_argument(
@@ -250,10 +256,23 @@ def main():
     )
     args = parser.parse_args()
 
-    chunks = chunking.load_chunks(args.chunks)
-    print(f"청크 {len(chunks):,}개로 대조합니다")
-    kept, dropped = build(chunks, args.sources, args.keep_ambiguous)
-    save(kept, dropped, args.out, args.chunks, chunk_signature(chunks))
+    kept, dropped = None, None
+    for name in args.chunks:
+        chunks = chunking.load_chunks(name)
+        print(f"{name}: 청크 {len(chunks):,}개")
+        got, why = build(chunks, args.sources, args.keep_ambiguous)
+        if kept is None:
+            kept, dropped = got, why
+            continue
+        # 교집합. 코퍼스가 다르면 살아남는 문항도 달라서, 안 맞추면 서로 다른
+        # 시험지로 채점하게 된다. 8/28 에 그걸로 하루를 버렸다.
+        alive = {squeeze(row["question"]) for row in got}
+        before = len(kept)
+        kept = [row for row in kept if squeeze(row["question"]) in alive]
+        dropped["다른코퍼스에없음"] += before - len(kept)
+
+    first = args.chunks[0]
+    save(kept, dropped, args.out, first, chunk_signature(chunking.load_chunks(first)))
 
     print("\n출처별")
     for name, count in Counter(r["source"] for r in kept).most_common():
