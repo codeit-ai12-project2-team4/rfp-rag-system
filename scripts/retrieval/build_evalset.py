@@ -107,7 +107,8 @@ def build(chunks, sources=None, keep_ambiguous=False, verbose=True):
         verbose (bool): 진행 상황을 찍을지.
 
     Returns:
-        tuple[list[dict], Counter]: 남은 문항들과 버린 사유별 개수.
+        tuple[list[dict], Counter, list[dict]]: 남은 문항, 사유별 개수,
+        버린 문항들(`_사유` 가 붙는다). 마지막 것은 다른 팀에 넘길 목록이다.
     """
     bodies = owners(chunks)
     rows = []
@@ -117,16 +118,21 @@ def build(chunks, sources=None, keep_ambiguous=False, verbose=True):
         if verbose:
             print(f"  {name}: {len(got)}문항")
 
-    kept, seen, dropped = [], set(), Counter()
+    kept, seen, dropped, out = [], set(), Counter(), []
+
+    def toss(row, why):
+        dropped[why] += 1
+        out.append({**row, "_사유": why})
+
     for row in rows:
         question = squeeze(row.get("question", ""))
         keywords = [k for k in (row.get("keywords") or []) if squeeze(k)]
 
         if not keywords:
-            dropped["빈키워드"] += 1
+            toss(row, "빈키워드")
             continue
         if question in seen:
-            dropped["중복질문"] += 1
+            toss(row, "중복질문")
             continue
 
         found = set()
@@ -139,29 +145,29 @@ def build(chunks, sources=None, keep_ambiguous=False, verbose=True):
             }
 
         if not found:
-            dropped["코퍼스에없음"] += 1
+            toss(row, "코퍼스에없음")
             continue
         if row.get("doc_id") not in found:
-            dropped["라벨불일치"] += 1
+            toss(row, "라벨불일치")
             continue
         if len(found) > 1 and not keep_ambiguous:
-            dropped["공고특정불가"] += 1
+            toss(row, "공고특정불가")
             continue
 
         seen.add(question)
         kept.append(row)
-    return kept, dropped
+    return kept, dropped, out
 
 
-def save(kept, dropped, out, chunks_name, signature, verbose=True):
+def save(kept, dropped, out, made_from, verbose=True):
     """결과와 함께 **어느 청크로 만든 세트인지** 옆에 적어 둔다.
 
     Args:
         kept (list[dict]): 남은 문항들.
         dropped (Counter): 버린 사유별 개수.
         out (str): `data/` 아래 저장할 파일 이름.
-        chunks_name (str): 대조에 쓴 청크 이름.
-        signature (str): 그 청크의 지문.
+        made_from (dict): {청크이름: 지문}. **여럿일 수 있다** — 교집합 세트는
+            여러 코퍼스로 만들어지고, 그중 아무 코퍼스로 재도 유효하다.
         verbose (bool): 요약을 찍을지.
 
     Returns:
@@ -172,8 +178,7 @@ def save(kept, dropped, out, chunks_name, signature, verbose=True):
     meta(out).write_text(
         json.dumps(
             {
-                "chunks": chunks_name,
-                "signature": signature,
+                "chunks": made_from,
                 "문항수": len(kept),
                 "버림": dict(dropped),
             },
@@ -225,16 +230,20 @@ def ensure(out, chunks_name, chunks, verbose=True):
     if not stamp.exists():
         return False  # 자동 관리 대상이 아니다
 
-    was = json.loads(stamp.read_text())
+    was = json.loads(stamp.read_text()).get("chunks") or {}
     now = chunk_signature(chunks)
-    if was.get("signature") == now and was.get("chunks") == chunks_name:
+
+    # 교집합 세트는 여러 코퍼스로 만들어진다. **그중 하나로 재는 건 정상이다.**
+    # 이걸 안 보면 v3 로 잴 때 v4·v3 교집합 세트를 v3 단독으로 덮어쓰고,
+    # 두 코퍼스를 서로 다른 문항으로 비교하게 된다. 실제로 그렇게 났다.
+    if was.get(chunks_name) == now:
         return False
 
     print(f"\n청크가 바뀌었습니다 — {out} 를 다시 만듭니다")
-    print(f"  만들 때  {was.get('chunks')} / {was.get('signature')}")
+    print(f"  만들 때  {', '.join(was) or '(없음)'}")
     print(f"  지금     {chunks_name} / {now}")
-    kept, dropped = build(chunks, verbose=verbose)
-    save(kept, dropped, out, chunks_name, now, verbose=verbose)
+    kept, dropped, _ = build(chunks, verbose=verbose)
+    save(kept, dropped, out, {chunks_name: now}, verbose=verbose)
     return True
 
 
@@ -256,23 +265,43 @@ def main():
     )
     args = parser.parse_args()
 
-    kept, dropped = None, None
+    kept, dropped, thrown = None, None, []
     for name in args.chunks:
         chunks = chunking.load_chunks(name)
         print(f"{name}: 청크 {len(chunks):,}개")
-        got, why = build(chunks, args.sources, args.keep_ambiguous)
+        got, why, tossed = build(chunks, args.sources, args.keep_ambiguous)
         if kept is None:
-            kept, dropped = got, why
+            kept, dropped, thrown = got, why, tossed
             continue
         # 교집합. 코퍼스가 다르면 살아남는 문항도 달라서, 안 맞추면 서로 다른
         # 시험지로 채점하게 된다. 8/28 에 그걸로 하루를 버렸다.
         alive = {squeeze(row["question"]) for row in got}
-        before = len(kept)
-        kept = [row for row in kept if squeeze(row["question"]) in alive]
-        dropped["다른코퍼스에없음"] += before - len(kept)
+        gone = [r for r in kept if squeeze(r["question"]) not in alive]
+        kept = [r for r in kept if squeeze(r["question"]) in alive]
+        dropped["다른코퍼스에없음"] += len(gone)
+        thrown += [{**r, "_사유": f"다른코퍼스에없음({name})"} for r in gone]
 
-    first = args.chunks[0]
-    save(kept, dropped, args.out, first, chunk_signature(chunking.load_chunks(first)))
+    made_from = {
+        name: chunk_signature(chunking.load_chunks(name)) for name in args.chunks
+    }
+    save(kept, dropped, args.out, made_from)
+
+    report = settings.DATA / f"{Path(args.out).stem}_dropped.json"
+    report.write_text(json.dumps(thrown, ensure_ascii=False, indent=2))
+    print(f"\n버린 문항 {len(thrown)}개 → {report.name}")
+
+    # 다른 팀에 그대로 넘길 수 있게 사유별로 몇 개씩 보여준다
+    for why in ["코퍼스에없음", "빈키워드", "라벨불일치"]:
+        group = [r for r in thrown if r["_사유"] == why]
+        if not group:
+            continue
+        print(f"\n[{why}] {len(group)}문항")
+        for row in group[:6]:
+            answer = (row.get("keywords") or [row.get("note", "")])[0]
+            print(f"  {row.get('doc_id', '?'):<18} {row['question'][:44]}")
+            print(f"  {'':<18} 정답  {str(answer)[:60]}")
+        if len(group) > 6:
+            print(f"  … 나머지 {len(group) - 6}개는 {report.name} 에")
 
     print("\n출처별")
     for name, count in Counter(r["source"] for r in kept).most_common():
