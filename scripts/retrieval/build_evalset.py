@@ -2,7 +2,7 @@
 
 지금 평가 세트가 넷이다. 만든 사람도 방식도 다르고 결함도 제각각이다.
 
-    data/eval_qa_80.json        팀원이 만든 80문항
+    data/eval_qa_160.json       팀원이 만든 160문항 (80문항판을 대체한다)
     data/eval_qa_gen.json       ollama 로 만든 101문항
     data/eval_qa_notitle.json   내가 만든 133문항 (사업명 제거판)
     data/eval_qa.json           같은 133문항 (사업명 포함 — 안 쓴다)
@@ -37,7 +37,7 @@ import chunking  # noqa: E402
 from config import settings  # noqa: E402
 from pieces.search import chunk_signature  # noqa: E402
 
-SOURCES = ["eval_qa_80.json", "eval_qa_gen.json", "eval_qa_notitle.json"]
+SOURCES = ["eval_qa_160.json", "eval_qa_gen.json", "eval_qa_notitle.json"]
 
 
 def squeeze(text):
