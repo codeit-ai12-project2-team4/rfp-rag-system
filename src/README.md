@@ -3,11 +3,13 @@
 ## generation 파트가 볼 것은 두 개뿐이다
 
 ```python
-from src.retriever import retrieve_context      # 질문 → 발췌 문자열
-from src.generation import generate_answer      # 질문 + 발췌 → 답변
+from src.retriever import retrieve_context  # 질문 → 발췌 문자열
+from src.generation import generate_answer  # 질문 + 발췌 → 답변
 
 context = retrieve_context("이 사업의 예산이 얼마야?")
-result = generate_answer(model_key="mini", query="이 사업의 예산이 얼마야?", context=context)
+result = generate_answer(
+    model_key="mini", query="이 사업의 예산이 얼마야?", context=context
+)
 ```
 
 프로젝트 루트에서 실행하면 된다. `retriever.py` 가 경로를 알아서 잡는다.
@@ -36,7 +38,9 @@ python src/retriever.py --export
 import json
 
 for row in map(json.loads, open("contexts_eval_qa.jsonl", encoding="utf-8")):
-    result = generate_answer(model_key="mini", query=row["question"], context=row["context"])
+    result = generate_answer(
+        model_key="mini", query=row["question"], context=row["context"]
+    )
 ```
 
 ```json
@@ -119,7 +123,7 @@ from src.generation import generate_answer
 from config import settings
 from preprocessing import load_documents
 from models import load_embedder
-from pieces import Pipeline, Dense, Rerank    # 검색 부품. 밖에서는 쓸 일 없다
+from pieces import Pipeline, Dense, Rerank  # 검색 부품. 밖에서는 쓸 일 없다
 ```
 
 ## 실행 — 산출물을 만드는 건 src 안의 파일이다
@@ -177,8 +181,8 @@ def load_store(name, embedder):
 다릅니다. 둘을 잇는 건 이 파일뿐이라 **여기만 안 바뀌면 양쪽이 따로 움직입니다.**
 
 ```bash
-uvicorn src.api:app --reload --port 8100
-open http://localhost:8100/docs      # 스펙 원본. 따로 문서 쓰지 않는다
+uvicorn src.api:app --reload --port 8088
+open http://localhost:8088/docs      # 스펙 원본. 따로 문서 쓰지 않는다
 ```
 
 | 엔드포인트 | 무엇 |

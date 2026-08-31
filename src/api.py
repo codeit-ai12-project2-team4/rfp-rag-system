@@ -3,7 +3,7 @@
 프론트(Next.js)는 별도 repo 다. 파이썬 소스를 볼 이유가 없고 배포 주기도 다르다.
 둘을 잇는 건 이 파일뿐이라, 여기만 안 바뀌면 양쪽이 따로 움직인다.
 
-    uvicorn src.api:app --reload --port 8100
+    uvicorn src.api:app --reload --port 8088
 
     POST /search   자연어로 공고 찾기 (1단계 — 사람이 목록에서 고르는 화면)
     POST /ask      고른 공고 안에서 질문 (2단계 — 발췌 → 답변 → 출처)
@@ -20,13 +20,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
-from fastapi import FastAPI  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from config import MODEL_CONFIGS  # noqa: E402
-from generation import generate_answer  # noqa: E402
-from retriever import build_context, retrieve, search_notices, sources  # noqa: E402
+from config import MODEL_CONFIGS
+from generation import generate_answer
+from retriever import build_context, retrieve, search_notices, sources
 
 app = FastAPI(title="입찰메이트 RFP")
 app.add_middleware(
@@ -50,6 +50,17 @@ class Ask(BaseModel):
     doc_ids: list[str] | None = None
     model: str = "mini"
     history: list[dict] | None = None
+
+
+@app.on_event("startup")
+def warm():
+    """뜰 때 BM25 색인을 지어 둔다.
+
+    청크 9,200개를 형태소 분석하는 데 6초 걸린다. 안 해두면 **첫 사용자가**
+    그 6초를 낸다. 워커는 하나로 둔다 — FAISS·청크·BM25 가 워커마다 통째로
+    복제되어 2GB 씩 먹는다.
+    """
+    retrieve("준비")
 
 
 @app.get("/models")
