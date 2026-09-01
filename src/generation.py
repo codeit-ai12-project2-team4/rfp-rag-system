@@ -2,7 +2,6 @@
 Generation 실행 파일
 
 바깥에서 호출하는 실행 함수는 generate_answer() 딱 1개뿐입니다.
-
 """
 
 from __future__ import annotations
@@ -16,10 +15,25 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import MAX_CONTEXT_CHARS, MODEL_CONFIGS, OPENAI_API_KEY, ModelConfig
 
+# ---------------------------------------------------------------------------
+# 기본값 상수 모음 (팀 회의로 값이 바뀌면 이 블록만 수정하면 됩니다)
+# ---------------------------------------------------------------------------
+DEFAULT_MAX_TOKENS_OPENAI = 5000
+"""gpt-5 계열은 답변 전에 추론 토큰을 먼저 소모하므로, 여유 있게 잡는다.
+1000이었을 때 추론에 예산을 다 써서 답변이 빈 문자열로 나오는 문제가 있었음(2026-08-28 회의 결정)."""
+
+DEFAULT_MAX_TOKENS_HF = 512
+"""HuggingFace 로컬 모델(시나리오 A)의 기본 생성 길이."""
+
+DEFAULT_JUDGE_MAX_TOKENS = 10
+"""ask()의 기본값. YES/NO 같은 짧은 채점용이라 작게 잡는다."""
+
 SYSTEM_PROMPT = """당신은 B2G 입찰 컨설팅 회사 입찰메이트의 RFP 분석 어시스턴트입니다.
 주어진 컨텍스트(RFP 문서 조각)만을 근거로 답변하세요.
 컨텍스트에 없는 내용은 "문서에서 확인되지 않습니다"라고 답하세요.
-불필요한 미사여구 없이 핵심만 정리해서 답변하세요."""
+불필요한 미사여구 없이 핵심만 정리해서 답변하세요.
+답변에서 특정 사실을 인용할 때는 그 근거가 된 컨텍스트 번호를 문장 끝에
+[1], [2]와 같은 형식으로 표기하세요."""
 
 
 def _result(
@@ -91,7 +105,7 @@ def _run_openai(
     Args:
         cfg: 사용할 모델의 ModelConfig.
         messages: _build_messages()로 만든 메시지 배열.
-        max_tokens: 생성할 최대 토큰 수. 생략하면 1000 (일반 답변 생성용 기본값).
+        max_tokens: 생성할 최대 토큰 수. 생략하면 DEFAULT_MAX_TOKENS_OPENAI.
             judge_faithfulness()처럼 YES/NO 한 단어만 필요할 때는 짧게 넘긴다.
 
     Returns:
@@ -109,7 +123,7 @@ def _run_openai(
     params = {
         "model": cfg.model,
         "messages": messages,
-        "max_completion_tokens": max_tokens or 1000,
+        "max_completion_tokens": max_tokens or DEFAULT_MAX_TOKENS_OPENAI,
         "reasoning_effort": cfg.reasoning_effort,
         "verbosity": cfg.verbosity,
     }
@@ -180,7 +194,8 @@ def _run_huggingface(
     Args:
         cfg: 사용할 모델의 ModelConfig.
         messages: _build_messages()로 만든 메시지 배열.
-        max_tokens: 생성할 최대 토큰 수. 생략하면 cfg.max_new_tokens(기본 512)를 쓴다.
+        max_tokens: 생성할 최대 토큰 수. 생략하면 cfg.max_new_tokens 또는
+            DEFAULT_MAX_TOKENS_HF를 쓴다.
 
     Returns:
         (answer, usage) 튜플. 로컬 모델은 토큰 사용량 계측이 없으면 usage=None.
@@ -191,7 +206,7 @@ def _run_huggingface(
     )
     outputs = pipe(
         prompt,
-        max_new_tokens=max_tokens or getattr(cfg, "max_new_tokens", 512),
+        max_new_tokens=max_tokens or getattr(cfg, "max_new_tokens", DEFAULT_MAX_TOKENS_HF),
         do_sample=False,
         **getattr(cfg, "extra", {}),
     )
@@ -315,7 +330,9 @@ def run_comparison(
 # 엮어야 하므로 이 파일이 아니라 src/pipeline.py의 GenerationPipeline이 맡는다.
 
 
-def ask(model_key: str, system: str, user: str, max_tokens: int = 10) -> str:
+def ask(
+    model_key: str, system: str, user: str, max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS
+) -> str:
     """RFP 질의응답 전용 프롬프트 없이, 시스템/사용자 메시지를 그대로 LLM에 넘긴다.
 
     generate_answer()는 SYSTEM_PROMPT와 "[컨텍스트]/[질문]" 형식을 강제로 씌우기
@@ -329,7 +346,7 @@ def ask(model_key: str, system: str, user: str, max_tokens: int = 10) -> str:
         model_key: config.MODEL_CONFIGS에 등록된 키 (예: "nano").
         system: 시스템 프롬프트.
         user: 사용자 메시지.
-        max_tokens: 생성할 최대 토큰 수. 기본값 10은 YES/NO 같은 짧은 채점용.
+        max_tokens: 생성할 최대 토큰 수. 기본값은 DEFAULT_JUDGE_MAX_TOKENS(짧은 채점용).
 
     Returns:
         모델이 생성한 텍스트. model_key가 잘못됐거나 호출이 실패하면 빈 문자열.
@@ -368,7 +385,7 @@ class AskableModel:
         self.model_key = model_key
         self.name = model_key  # models/llm.py 쪽 LLM 객체들과 인터페이스를 맞춤
 
-    def ask(self, system: str, user: str, max_tokens: int = 10) -> str:
+    def ask(self, system: str, user: str, max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS) -> str:
         return ask(self.model_key, system, user, max_tokens=max_tokens)
 
     def __repr__(self) -> str:
