@@ -100,12 +100,14 @@ def main():
         print(f"⚠ 정답 공고가 코퍼스에 없는 문항 {len(missing)}개는 뺍니다")
         pairs = [p for p in pairs if p not in missing]
 
+    # chunks=None 이어야 BM25 를 안 짓는다. 안 주면 search_notices 의 기본값
+    # (retriever.CHUNKS)으로 지어서, Dense 행이 **다른 코퍼스의 BM25 와 섞인다.**
     setups = {
-        "Dense": {},
+        "Dense": {"chunks": None},
         "Hybrid": {"chunks": args.chunks},
     }
     if not args.no_rerank:
-        setups["Dense+Rerank"] = {"rerank": args.rerank}
+        setups["Dense+Rerank"] = {"chunks": None, "rerank": args.rerank}
         setups["Hybrid+Rerank"] = {"chunks": args.chunks, "rerank": args.rerank}
 
     rows = []

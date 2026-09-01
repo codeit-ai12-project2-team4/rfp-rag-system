@@ -90,8 +90,11 @@ from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
-CHUNKS = "cleaned_documents_v3__recursive_1200_200"
+CHUNKS = "cleaned_documents_v4__recursive_1500_250"
 INDEX = f"{CHUNKS}__tei"  # 머리말 없는 쪽. BM25 와 섞을 때는 이게 낫다
+# v4 는 표 마커를 걷어낸 전처리본이라 같은 글자 수에 내용이 14% 더 들어간다.
+# 크기는 900~2100 을 재고 1500 을 골랐다 — Dense 가 여기서 최고고, 그 위로
+# 오르는 건 청크가 줄어 경쟁자가 준 몫이지 검색이 나아진 게 아니다.
 POOL = 80  # 리랭커에 넘길 후보 수. 30/50/80/120 을 141문항으로 재고 골랐다 —
 # 30 → 80 이 가중평균 +0.043 으로 이번 주 최대 개선이다. 120 은 +0.004 인데
 # 리랭커가 채점할 후보가 1.5배라 뺐다. 의역 유형만 30 이 제일 낫다(-0.012):
