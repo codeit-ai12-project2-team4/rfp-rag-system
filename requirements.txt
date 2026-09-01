@@ -18,6 +18,7 @@ cryptography==50.0.0
 debugpy==1.8.21
 distro==1.9.0
 docutils==0.23
+einops==0.8.2
 executing==2.2.1
 faiss-cpu==1.15.0
 filelock==3.32.4
@@ -39,6 +40,7 @@ itsdangerous==2.2.0
 jedi==0.20.0
 jinja2==3.1.6
 jiter==0.16.0
+joblib==1.5.3
 jsonpatch==1.33
 jsonpointer==3.1.1
 jupyter-client==8.9.1
@@ -101,6 +103,9 @@ requests==2.34.2
 requests-toolbelt==1.0.0
 rich==15.0.0
 safetensors==0.8.0
+scikit-learn==1.9.0
+scipy==1.17.1
+sentence-transformers==6.0.0
 setuptools==79.0.1
 shellingham==1.5.4
 six==1.17.0
@@ -110,6 +115,7 @@ stack-data==0.6.3
 starlette==1.6.0
 sympy==1.14.0
 tenacity==9.1.4
+threadpoolctl==3.6.0
 tokenizers==0.22.2
 tomlkit==0.15.1
 torch==2.13.0
@@ -123,37 +129,10 @@ typing-extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.7.0
 uuid-utils==0.17.0
+fastapi
 uvicorn==0.52.4
 wcwidth==0.8.2
-
-
-### 상기되지 않은 항목들 추가
-
-# --- 문서에서 글자 뽑기 ---
-# 기존에 있음 #olefile>=0.47            # HWP 파일 열기 (pyhwp 는 최신 파이썬에서 설치가 깨져 안 씀)
-pdfplumber>=0.11         # PDF 에서 표까지 뽑기
-
-# --- 데이터 다루기 ---
-pyyaml>=6.0
-
-# --- RAG ---
-langchain-core>=0.3          # Document 같은 기본 자료형
-langchain-community>=0.3     # FAISS 연결
-langchain-text-splitters>=0.3
-faiss-cpu>=1.9               # 벡터 검색. 청크 수천 개면 CPU 로 충분하다
-rank-bm25>=0.2.2             # 키워드 검색
-kiwipiepy>=0.20              # 한국어 형태소 분석 (BM25 정확도에 중요)
-
-# --- 서버에 붙기 ---
-requests>=2.32               # TEI 호출
-
-# --- 생성 (시나리오 A, HuggingFace 로컬 모델) ---
-torch>=2.4                   # HuggingFace 모델 구동
-transformers>=4.45           # pipeline("text-generation")
-accelerate>=0.34             # device_map="auto"
-bitsandbytes>=0.43           # 8bit/4bit 양자화 (선택이지만 있으면 VRAM 절약)
-
-# --- 노트북 ---
-# jupyter>=1.1
-# ipykernel>=6.29
-# matplotlib>=3.9
+websockets==17.0.1
+xxhash==4.0.1
+yarl==1.24.5
+zstandard==0.25.0

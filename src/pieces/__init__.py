@@ -15,12 +15,15 @@
 """
 
 from pieces.base import Pipeline, State, dedup_chunks, name_of
+from pieces.expand import AddKeywords
 from pieces.refine import Rerank, TopK, Widen
 from pieces.search import (
     BM25,
     Dense,
     FilterBy,
     Hybrid,
+    Splade,
+    SpladeModel,
     clear_bm25_cache,
     has_kiwi,
     keep_docs,
@@ -30,11 +33,14 @@ from pieces.search import (
 
 __all__ = [
     "BM25",
+    "AddKeywords",
     "Dense",
     "FilterBy",
     "Hybrid",
     "Pipeline",
     "Rerank",
+    "Splade",
+    "SpladeModel",
     "State",
     "TopK",
     "Widen",

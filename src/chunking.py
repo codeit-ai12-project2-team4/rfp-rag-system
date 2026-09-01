@@ -121,7 +121,7 @@ def _make_chunk(text, source_meta, order, section=None, add_header=False):
 # --- 방법 1. 글자 수로 자르기 --------------------------------------------
 
 
-def split_recursive(records, size=1000, overlap=150, add_header=False):
+def split_recursive(records, size=1200, overlap=200, add_header=False):
     """글자 수로 자른다. 문단 → 줄 → 문장 순으로 경계를 지킨다.
 
     강의에서 쓴 `RecursiveCharacterTextSplitter` 와 같다. 강의는 150자였는데
@@ -309,10 +309,13 @@ def with_header(chunks, include_section=True):
 def leader_count(text):
     """한글에서 새어나온 깨진 쪽번호 글자 수.
 
-    한글 문서의 목차는 `Ⅰ. 사업개요 ⋯⋯ 1` 의 점선과 쪽번호가 필드 코드로 들어
-    있어서, 글자로 뽑으면 라틴확장B(U+0180~U+024F) 영역으로 샌다.
-    `4. 세부 작성지침爜ȃ35` 처럼 보인다. **한글 본문에는 이 영역 글자가 안 나오므로
-    목차를 찾는 값싼 신호가 된다.**
+    v1 전처리본(`cleaned_documents`)에서만 나오는 신호다. 한글 목차의 점선과
+    쪽번호가 필드 코드로 들어 있어 글자로 뽑으면 라틴확장B(U+0180~U+024F)로
+    샜다. `4. 세부 작성지침爜ȃ35` 처럼 보인다.
+
+    **팀원의 새 파서(v2 계열)는 이 문자를 안 만든다.** 그래서 이 신호만 쓰면
+    목차를 하나도 못 잡는다 — 실제로 청크 8,381개 중 0개였고, 목차 청크가
+    "예산이 얼마야?" 에 2위로 올라왔다. `toc_lines` 를 같이 쓴다.
 
     Args:
         text: 청크 본문.
@@ -321,6 +324,77 @@ def leader_count(text):
         라틴확장B 글자 수.
     """
     return sum(1 for ch in text if "\u0180" <= ch <= "\u024f")
+
+
+# 목차 표시. 이게 있어야 그 청크를 목차로 의심한다.
+_TOC_MARK = re.compile(r"목\s*차|\[(별지|붙임|첨부)|[·.…⋯]{4,}")
+# 점선 안내선. `제안서 효력 ·············· 242` 꼴이다.
+# **띄어쓰기 없이 이어진 것만** 본다 — 표 셀 구분자 ` · ` 를 잡으면 안 된다.
+_LEADER_DOTS = re.compile(r"[·.…⋯]{4,}")
+# "제목 … 12" — 단위 없는 1~3자리 숫자로 끝나는 조각. 쪽번호다.
+_PAGE_REF = re.compile(r"[가-힣A-Za-z\)\]][^\n]{0,60}?[\s\t]+(\d{1,3})(?=\s|$)")
+# v3 목차는 쪽번호가 아예 없는 것이 많다. 대신 절 표시가 한 줄에 몰려 있다 —
+# `Ⅰ. 사업 개요 … Ⅱ. 제안요청 내용 … Ⅲ. 입찰 안내`. 본문에서는 한 줄에
+# 절 표시가 셋씩 나오지 않는다. 코퍼스 전체에서 88줄이 걸리고 전부 목차였다.
+_SECTION_RUN = re.compile(r"[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\s*[.=]")
+
+
+def toc_lines(text, min_refs=1, max_chars=80, many_refs=3):
+    """줄마다 목차인지 판정한다. **`toc_ish` 로 걸러진 청크 안에서만 쓴다.**
+
+    목차 줄은 두 가지 꼴이다.
+
+    - 단위 없는 쪽번호로 끝나는 짧은 줄 — `1. 사업일반\t1`, `[양식 2] 서약서\t73`.
+      본문은 단위가 붙어서(`49,500천원`, `계약일로부터 150일`) 안 걸린다.
+    - 쪽번호가 여럿 모인 긴 줄 — v3 는 목차를 한 줄로 이어 붙인다.
+    - 점선 안내선 — `제안서 효력 ·············· 242`. 점이 너무 길어 쪽번호가
+      안 잡히므로 점선만으로 판정한다. 다만 **띄어쓰기 없이 이어진 점**만 센다.
+      표 셀 구분자 ` · ` 를 잡으면 표가 다 날아간다.
+
+    쪽번호 하나만으로 판정하므로 느슨하다. 그래서 `toc_ish()` 가 목차 표시를
+    확인한 청크에만 적용한다. 목차는 한 줄에 한 항목씩 오는 문서가 많아서
+    (`제1장 사업 개요\t1`) 줄당 2개를 요구하면 통째로 놓친다.
+
+    Args:
+        text: 청크 본문.
+        min_refs: 한 줄에 쪽번호가 이만큼 있어야 목차 줄로 본다.
+        max_chars: 이보다 긴 줄은 본문으로 본다. 목차 항목은 짧다.
+        many_refs: 쪽번호가 이만큼 모여 있으면 길이와 상관없이 목차 줄로 본다.
+
+    Returns:
+        줄마다 True/False 리스트.
+    """
+    out = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        dotted = bool(_LEADER_DOTS.search(stripped))
+        # v3 전처리본은 목차를 한 줄로 이어 붙인다 —
+        # `- 추진개요\t3 - 추진방안\t5 - 추진일정\t7 …`. 길이로만 자르면
+        # 이게 전부 본문으로 통과한다. 쪽번호가 여럿 모인 줄은 길어도 목차다.
+        refs = len(_PAGE_REF.findall(stripped))
+        numbered = refs >= many_refs or (refs >= min_refs and len(stripped) <= max_chars)
+        sectioned = len(_SECTION_RUN.findall(stripped)) >= 3
+        out.append(dotted or numbered or sectioned)
+    return out
+
+
+def toc_ish(text, min_refs=4):
+    """이 청크에 목차가 들어 있나.
+
+    목차 표시(`목차`·`[별지`·`[붙임`·`[첨부`·점선)가 있고, 쪽번호가 여러 개
+    모여 있어야 한다. 둘 중 하나만으로는 안 된다 — 쪽번호만 보면
+    `1 · 가천대학교 · 35 · 국립한국해양대학교` 같은 **진짜 표**가 걸린다.
+    """
+    if not _TOC_MARK.search(text):
+        return False
+    lines = text.split("\n")
+    flags = toc_lines(text)
+    if any(_LEADER_DOTS.search(line) for line in lines):
+        return True  # 점선 안내선은 그것만으로 충분하다
+    if any(len(_SECTION_RUN.findall(line)) >= 3 for line in lines):
+        return True  # 절 표시가 한 줄에 셋 이상이면 목차다
+    return sum(len(_PAGE_REF.findall(line))
+               for line, f in zip(lines, flags, strict=False) if f) >= min_refs
 
 
 def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
@@ -339,13 +413,13 @@ def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
     `cleaned_documents.jsonl` 은 칸마다 줄이 나뉜 형식이라 문서 전체를 목차로
     보고 **8,743,663자를 200자로 만들어 버린다.**
 
-    남은 줄의 본문은 손대지 않는다. `preprocessing.strip_toc_leaders` 를 돌리면
-    `[⺀-鿿]?[ƀ-ʯ]+\s*\d*` 의 `\s*\d*` 가 라틴확장 뒤의 **진짜 숫자까지** 먹는다
-    (`사업예산籄ȃ 49,500천원` → `사업예산 ,500천원`).
+    신호를 두 개 쓴다 — v1 은 라틴확장B(`leader_count`), v2 계열은
+    목차 표시 + 쪽번호 줄(`toc_ish`). 전처리본이 바뀌면 한쪽이 조용히 죽으므로
+    **둘 다 본다.**
 
     Args:
         chunks: 자른 Document 리스트.
-        min_leaders: 깨진 쪽번호 글자가 이만큼 있는 청크만 손댄다.
+        min_leaders: 깨진 쪽번호 글자가 이만큼 있는 청크만 손댄다 (v1 신호).
         min_chars: 목차 줄을 뺀 뒤 이보다 짧으면 목차뿐인 청크로 보고 버린다.
         verbose: 몇 개를 손댔는지 찍을지.
 
@@ -354,11 +428,18 @@ def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
     """
     kept, trimmed, dropped = [], 0, 0
     for chunk in chunks:
-        if leader_count(chunk.page_content) < min_leaders:
+        text = chunk.page_content
+        by_leader = leader_count(text) >= min_leaders
+        by_page = toc_ish(text)
+        if not (by_leader or by_page):
             kept.append(chunk)
             continue
+
+        flags = toc_lines(text)
         body = "\n".join(
-            line for line in chunk.page_content.split("\n") if leader_count(line) == 0
+            line
+            for line, is_toc in zip(text.split("\n"), flags, strict=False)
+            if not (is_toc and by_page) and leader_count(line) == 0
         ).strip()
         if len(body) < min_chars:
             dropped += 1
@@ -465,8 +546,8 @@ def main():
         help="data/processed 안의 jsonl 이름 (확장자 없이)",
     )
     parser.add_argument("--how", default="section", choices=["section", "recursive"])
-    parser.add_argument("--size", type=int, default=1000)
-    parser.add_argument("--overlap", type=int, default=150)
+    parser.add_argument("--size", type=int, default=1200)  # 실측으로 고른 값
+    parser.add_argument("--overlap", type=int, default=200)
     parser.add_argument("--name", help="저장 이름 (생략하면 설정에서 자동으로 만든다)")
     parser.add_argument(
         "--raw", action="store_true", help="목차·깨진 쪽번호를 안 지운다 (비교용)"
@@ -500,8 +581,8 @@ def main():
     print("\n다음:")
     print(f"  python src/vectorstore.py --chunks {name}")
     print(f"  python src/vectorstore.py --chunks {name}__header")
-    print(f"  python scripts/compare_retrieval.py --chunks {name}")
+    print(f"  python scripts/retrieval/compare_retrieval.py --chunks {name}")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -8,6 +8,7 @@ Generation 실행 파일
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -16,10 +17,18 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import MAX_CONTEXT_CHARS, MODEL_CONFIGS, OPENAI_API_KEY, ModelConfig
 
-SYSTEM_PROMPT = """당신은 B2G 입찰 컨설팅 회사 입찰메이트의 RFP 분석 어시스턴트입니다.
-주어진 컨텍스트(RFP 문서 조각)만을 근거로 답변하세요.
-컨텍스트에 없는 내용은 "문서에서 확인되지 않습니다"라고 답하세요.
-불필요한 미사여구 없이 핵심만 정리해서 답변하세요."""
+# 프롬프트는 코드가 아니라 내용이다. 파일로 두면 배포 없이 고칠 수 있고,
+# 매 호출마다 읽으니 재시작도 필요 없다. 관리자 화면은 이게 부족해질 때 만든다.
+PROMPT_FILE = Path(__file__).resolve().parents[1] / "config/prompts/system.md"
+
+
+def system_prompt() -> str:
+    """시스템 프롬프트를 지금 읽는다.
+
+    Returns:
+        str: `config/prompts/system.md` 의 내용.
+    """
+    return PROMPT_FILE.read_text(encoding="utf-8").strip()
 
 
 def _result(
@@ -71,7 +80,7 @@ def _build_messages(
         OpenAI Chat Completions / HuggingFace chat template에 그대로 넣을 수 있는 메시지 리스트.
     """
     trimmed_context = context[:MAX_CONTEXT_CHARS]
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system_prompt()}]
     if history:
         messages.extend(history)
     messages.append(
@@ -318,7 +327,7 @@ def run_comparison(
 def ask(model_key: str, system: str, user: str, max_tokens: int = 10) -> str:
     """RFP 질의응답 전용 프롬프트 없이, 시스템/사용자 메시지를 그대로 LLM에 넘긴다.
 
-    generate_answer()는 SYSTEM_PROMPT와 "[컨텍스트]/[질문]" 형식을 강제로 씌우기
+    generate_answer()는 시스템 프롬프트와 "[컨텍스트]/[질문]" 형식을 강제로 씌우기
     때문에, judge_faithfulness()처럼 임의의 시스템 프롬프트로 채점만 시키는 범용
     LLM 호출에는 쓸 수 없다. 이 함수는 그 틀 없이 순수하게 system/user만 넘긴다.
 

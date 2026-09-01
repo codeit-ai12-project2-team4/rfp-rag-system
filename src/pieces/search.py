@@ -21,7 +21,11 @@ Hybrid  둘을 섞는다.             보통 이게 제일 낫다
 등수는 그런 문제가 없다. 60 은 관례값이고, 키우면 등수 차이가 덜 중요해진다.
 """
 
+import hashlib
+import os
+import time
 from collections import OrderedDict
+from enum import Enum
 
 import numpy as np
 from rank_bm25 import BM25Okapi
@@ -114,6 +118,345 @@ def run_search(searcher, state):
 
 
 # --- 부품 ---------------------------------------------------------------
+
+
+# Splade 는 TEI 로도 돌릴 수 있다. 로컬에서 코퍼스를 인코딩하면 맥이 뜨거우니
+# 되도록 이쪽을 쓴다. 도커에 `--pooling=splade` 로 띄우고 8084 로 연다.
+# **엔드포인트가 다르다** — splade pooling 모델에 `/embed` 를 부르면 424 가 난다.
+TEI_SPLADE_URL = os.environ.get("TEI_SPLADE_URL", "http://localhost:8084")
+
+
+class SpladeModel(Enum):
+    """어휘 확장을 위해 추천하는 Splade 모델 라인업."""
+
+    PIXIE = "telepix/PIXIE-Splade-v1.5"
+    JANG = "yjoonjang/splade-ko-v1"
+
+
+def chunk_signature(chunks):
+    """이 청크 묶음이 무엇인지 짧은 지문으로.
+
+    청크 이름은 그대로인데 내용만 바뀌는 일이 잦다 — 목차 제거는 **줄**을
+    지우므로 청크 개수가 안 변한다. 실제로 9,189개 그대로였다. 개수만 보면
+    못 잡으니 본문을 해시한다.
+
+    Args:
+        chunks: 청크 리스트.
+
+    Returns:
+        str: 12자리 지문.
+    """
+    digest = hashlib.md5()
+    for chunk in chunks:
+        digest.update(chunk.page_content.encode())
+    return digest.hexdigest()[:12]
+
+
+class Splade:
+    """어휘 확장(Splade)으로 찾는 희소 검색기.
+
+    BM25 는 질문에 있는 글자만 본다. Splade 는 마스크 언어모델을 돌려
+    "클라우드" 문서에 "인프라·서버" 같은 안 적힌 낱말까지 가중치를 붙인다.
+    키워드 검색인데 동의어를 스스로 만드는 셈이다.
+
+    문서 벡터는 어휘 크기(수만 차원)지만 실제로 0 이 아닌 칸은 수백 개뿐이라,
+    상위 `top_terms` 개만 (칸번호, 값) 두 배열로 들고 있는다. 8,381 청크 기준
+    17MB 정도다. 전부 들고 있으면 수 GB 가 되고 맥이 뜨거워진다.
+
+    인덱스는 `cache` 이름을 주면 `outputs/vectorstore/` 에 저장했다가 다음
+    실행에서 그대로 읽는다. 코퍼스 인코딩이 이 부품에서 제일 비싼 일이다.
+
+    ponytail: 코퍼스 전체를 한 번에 인코딩한다. 나라장터에서 매일 새 공고를
+    받는 배포에서는 새 청크만 붙여야 한다 — 수학적으로는 `np.vstack` 한 줄이다.
+    막고 있는 건 지문(`chunk_signature`)이 코퍼스 전체 해시라 한 개만 늘어도
+    전부 다시 만들게 되는 것이다. 증분이 필요해지면 지문을 chunk_id 집합으로
+    바꾸고 `add(chunks)` 를 붙인다.
+
+    Attributes:
+        k (int): 기본으로 돌려줄 청크 개수.
+        chunks (list): 검색 대상 청크 리스트.
+        model_id (str): 허깅페이스 모델 ID.
+        idx (np.ndarray): (청크수, top_terms) 어휘 칸번호.
+        val (np.ndarray): (청크수, top_terms) 그 칸의 가중치.
+    """
+
+    def __init__(
+        self,
+        chunks,
+        model=SpladeModel.PIXIE,
+        k=5,
+        batch_size=8,
+        top_terms=256,
+        max_length=1024,
+        url=None,
+        cache=None,
+        refresh=False,
+        verbose=False,
+    ):
+        """모델을 올리고 청크를 인코딩한다. 캐시가 있으면 인코딩을 건너뛴다.
+
+        Args:
+            chunks (iterable): page_content 를 가진 청크들.
+            model (SpladeModel or str): 모델 Enum 또는 허깅페이스 ID.
+            k (int): 기본 반환 개수. 기본값 5.
+            batch_size (int): 한 번에 인코딩할 청크 수. 기본값 8.
+                GPU 메모리가 모자라면 알아서 절반씩 줄여 다시 시도한다.
+            top_terms (int): 문서당 남길 상위 낱말 수. 기본값 256.
+            max_length (int): 자를 토큰 수. 기본값 1024.
+                512 로 두면 1,200자 청크의 뒤쪽 40%가 통째로 안 보인다.
+                ModernBERT 계열은 8192 까지 받으므로 여유가 있다.
+            url (str, optional): TEI 서버 주소. 주면 `/embed_sparse` 로 맡기고
+                로컬에 모델을 안 올린다. "tei" 를 주면 기본 주소를 쓴다.
+            cache (str, optional): 캐시 이름. 보통 청크 세트 이름을 준다.
+                주지 않으면 매번 코퍼스를 다시 인코딩한다.
+            refresh (bool): 캐시가 청크와 안 맞을 때 다시 만들지. 만드는 쪽
+                (`build_splade.py`)만 True 로 준다. 검색 쪽에서 True 로 두면
+                맥에서 코퍼스를 통째로 인코딩하게 된다.
+            verbose (bool): 진행 상황 출력 여부.
+        """
+        self.k = k
+        self.chunks = list(chunks)
+        self.model_id = model.value if isinstance(model, SpladeModel) else model
+        self.batch_size = batch_size
+        self.top_terms = top_terms
+        self.max_length = max_length
+        self.url = TEI_SPLADE_URL if url == "tei" else (url.rstrip("/") if url else None)
+        self._model = None
+        self._tokenizer = None
+
+        path = None
+        if cache:
+            from config import settings
+
+            stem = f"{cache}__splade__{self.model_id.split('/')[-1]}"
+            path = settings.VECTORSTORE / f"{stem}.npz"
+
+        signature = chunk_signature(self.chunks)
+        if path and path.exists():
+            saved = np.load(path)
+            was = str(saved["signature"]) if "signature" in saved else "(없음)"
+            if was == signature:
+                self.idx, self.val = saved["idx"], saved["val"]
+                if verbose:
+                    print(f"Splade 인덱스 재사용 {path.name}")
+                return
+            if not refresh:
+                raise RuntimeError(
+                    f"Splade 인덱스가 지금 청크와 다릅니다: {path.name}\n"
+                    f"  만들 때  {was}\n"
+                    f"  지금     {signature}\n"
+                    "청크 개수가 같아도 내용이 바뀌면 못 씁니다. GPU 가 있는 곳에서\n"
+                    "다시 만들어 npz 를 가져오세요:\n"
+                    f"  python scripts/retrieval/build_splade.py --chunks {cache}"
+                )
+
+        started = time.time()
+        if verbose:
+            print(f"Splade 인덱스 생성 중 … ({self.model_id}, 청크 {len(self.chunks):,}개)")
+        self.idx, self.val = self._encode([c.page_content for c in self.chunks], verbose)
+        if verbose:
+            print(f"Splade 인덱스 {time.time() - started:.0f}초")
+
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                path, idx=self.idx, val=self.val, signature=signature
+            )
+
+    def _load(self):
+        """모델과 토크나이저를 한 번만 올린다.
+
+        Returns:
+            tuple: (tokenizer, model, device) 세 값.
+        """
+        if self._model is not None:
+            return self._tokenizer, self._model, self._device
+
+        import torch
+        from transformers import AutoModelForMaskedLM, AutoTokenizer, logging
+
+        logging.set_verbosity_error()
+        if torch.cuda.is_available():
+            self._device = "cuda"
+        elif torch.backends.mps.is_available():
+            self._device = "mps"
+        else:
+            self._device = "cpu"
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self._model = AutoModelForMaskedLM.from_pretrained(self.model_id)
+        self._model.to(self._device).eval()  # 옮기는 건 여기 한 번뿐이다
+        if self._device == "cuda":
+            self._model.half()  # 로짓이 (묶음 x 토큰수 x 어휘수) 라 절반이 크다
+        return self._tokenizer, self._model, self._device
+
+    def _encode(self, texts, verbose=False):
+        """텍스트들을 희소 벡터로 바꿔 (칸번호, 값) 두 배열로 돌려준다.
+
+        Args:
+            texts (list[str]): 인코딩할 텍스트들.
+            verbose (bool): 진행률 출력 여부.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: 각각 (개수, top_terms) 모양.
+        """
+        if self.url:
+            return self._encode_tei(texts, verbose)
+
+        import torch
+
+        tokenizer, model, device = self._load()
+        n = min(self.top_terms, model.config.vocab_size)
+        idx = np.zeros((len(texts), n), dtype=np.int32)
+        val = np.zeros((len(texts), n), dtype=np.float32)
+
+        # 긴 글끼리 모아 자른다. 한 묶음은 그 안에서 제일 긴 글에 맞춰 패딩되므로,
+        # 섞여 있으면 300자짜리도 1,024 토큰으로 부풀어 그만큼 메모리를 쓴다.
+        order = sorted(range(len(texts)), key=lambda i: -len(texts[i]))
+        batch_size = self.batch_size
+        done = 0
+
+        while done < len(order):
+            picked = order[done : done + batch_size]
+            try:
+                top = self._forward([texts[i] for i in picked], tokenizer, model, device, n)
+            except getattr(torch, "OutOfMemoryError", torch.cuda.OutOfMemoryError):
+                if batch_size == 1:
+                    raise
+                batch_size = max(1, batch_size // 2)
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+                print(f"  GPU 메모리 부족 — 묶음을 {batch_size} 로 줄인다")
+                continue
+
+            for row, i in enumerate(picked):
+                idx[i] = top[0][row]
+                val[i] = top[1][row]
+            done += len(picked)
+
+            if verbose and done % (batch_size * 50) < batch_size:
+                print(f"  {done:,}/{len(texts):,}")
+
+        return idx, val
+
+    def _forward(self, batch, tokenizer, model, device, n):
+        """한 묶음을 인코딩해 상위 n 개 (칸번호, 값) 을 돌려준다.
+
+        메모리가 여기서 갈린다. MLM 머리는 `(묶음, 토큰수, 어휘수)` 를 뱉는데
+        32 x 1024 x 50,368 이면 float32 로 **6.6GB** 다. 여기에
+        `log1p(relu(...))` 와 마스크 곱을 차례로 하면 사본이 셋이 되어 20GB 가
+        된다. 실제로 그렇게 죽었다.
+
+        `log1p(relu(x))` 는 단조증가라 **max pooling 을 먼저 해도 결과가 같다.**
+        먼저 `(묶음, 어휘수)` 로 줄이고 나서 계산하면 사본이 안 생긴다.
+
+        Args:
+            batch (list[str]): 한 묶음의 텍스트.
+            tokenizer: 토크나이저.
+            model: MLM 모델.
+            device (str): 연산 장치.
+            n (int): 남길 상위 낱말 수.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: (칸번호, 값). 각각 (묶음, n) 모양.
+        """
+        import torch
+
+        inputs = tokenizer(
+            batch,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+        ).to(device)
+
+        with torch.inference_mode():
+            logits = model(**inputs).logits
+            # 패딩 자리가 max 를 이기지 못하게 눌러 둔다. 제자리 연산이라 사본이 없다
+            logits.masked_fill_(inputs.attention_mask.unsqueeze(-1) == 0, -1e4)
+            pooled = logits.max(dim=1).values  # 여기서 (묶음, 어휘수) 로 줄어든다
+            del logits
+            pooled = torch.log1p(torch.relu(pooled))
+            top = pooled.topk(n, dim=-1)  # 어차피 대부분 0 이라 상위만 남긴다
+            return (
+                top.indices.cpu().numpy(),
+                top.values.float().cpu().numpy(),
+            )
+
+    def _encode_tei(self, texts, verbose=False):
+        """인코딩을 TEI 에 맡긴다. `/embed_sparse` 는 (칸번호, 값) 쌍만 돌려준다.
+
+        Args:
+            texts (list[str]): 인코딩할 텍스트들.
+            verbose (bool): 진행률 출력 여부.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]: 각각 (개수, top_terms) 모양.
+        """
+        import requests
+
+        n = self.top_terms
+        idx = np.zeros((len(texts), n), dtype=np.int32)
+        val = np.zeros((len(texts), n), dtype=np.float32)
+
+        for at in range(0, len(texts), self.batch_size):
+            batch = texts[at : at + self.batch_size]
+            response = requests.post(
+                f"{self.url}/embed_sparse",
+                json={"inputs": batch, "truncate": True},
+                timeout=120,
+            )
+            if response.status_code == 424:
+                raise RuntimeError(
+                    f"{self.url} 가 splade 모델이 아니다. "
+                    "도커에서 --pooling=splade 로 띄웠는지 본다."
+                )
+            response.raise_for_status()
+
+            for row, pairs in enumerate(response.json()):
+                pairs = sorted(pairs, key=lambda p: -p["value"])[:n]
+                idx[at + row, : len(pairs)] = [p["index"] for p in pairs]
+                val[at + row, : len(pairs)] = [p["value"] for p in pairs]
+
+            if verbose and at and at % (self.batch_size * 50) == 0:
+                print(f"  {at:,}/{len(texts):,}")
+
+        return idx, val
+
+    def search(self, query, k=None):
+        """질문과 내적이 큰 상위 k 개 청크를 돌려준다.
+
+        Args:
+            query (str): 질문.
+            k (int, optional): 반환 개수. 없으면 self.k.
+
+        Returns:
+            list: 점수 높은 순 청크 리스트.
+        """
+        k = k or self.k
+        q_idx, q_val = self._encode([query])
+        # 질문 쪽 낱말만 모아 한 번에 훑는다. 청크마다 np.dot 하면 8천 번이다
+        size = max(int(self.idx.max()), int(q_idx.max())) + 1
+        lookup = np.zeros(size, dtype=np.float32)
+        lookup[q_idx[0]] = q_val[0]
+        scores = (lookup[self.idx] * self.val).sum(axis=1)
+
+        order = np.argsort(scores)[::-1][:k]
+        return [self.chunks[i] for i in order if scores[i] > 0]
+
+    def __call__(self, state):
+        """조립대에 끼울 때 쓴다.
+
+        Args:
+            state: 파이프라인 상태 객체.
+
+        Returns:
+            검색 결과가 담긴 상태 객체.
+        """
+        return run_search(self, state)
+
+    def __repr__(self):
+        return f"Splade(model={self.model_id.split('/')[-1]}, k={self.k})"
 
 
 class Dense:
@@ -381,3 +724,26 @@ class FilterBy:
         if self.budget_max:
             conds.append(f"예산≤{self.budget_max / 1e8:.1f}억")
         return f"FilterBy({', '.join(conds) or '조건없음'})"
+
+
+if __name__ == "__main__":
+    # Splade 점수 계산만 확인한다. 모델은 안 올린다.
+    import types
+
+    class _Chunk:
+        def __init__(self, text):
+            self.page_content = text
+
+    s = Splade.__new__(Splade)
+    s.chunks = [_Chunk("a"), _Chunk("b"), _Chunk("c")]
+    s.k = 2
+    s.idx = np.array([[0, 1], [1, 2], [3, 4]], np.int32)
+    s.val = np.array([[1.0, 1.0], [2.0, 1.0], [5.0, 5.0]], np.float32)
+    s._model = types.SimpleNamespace(config=types.SimpleNamespace(vocab_size=8))
+    s._encode = lambda texts: (
+        np.array([[1, 2]], np.int32),
+        np.array([[1.0, 1.0]], np.float32),
+    )
+    # b = 2*1 + 1*1 = 3, a = 1, c = 0 이라 탈락
+    assert [c.page_content for c in s.search("질문")] == ["b", "a"]
+    print("Splade 점수 계산 통과")

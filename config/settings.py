@@ -24,7 +24,13 @@ def load_env():
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+        value = value.strip()
+        # 따옴표로 감싼 값은 안쪽을 그대로 쓴다. 임베딩 접두어처럼 **뒤 공백이
+        # 의미를 갖는** 값이 있어서, 무조건 strip 하면 조용히 틀린 값이 된다.
+        #     EMBED_QUERY_PREFIX="query: "   ← 따옴표가 있어야 공백이 산다
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
 
 
 load_env()  # 키를 읽기 전에 .env 부터 올린다

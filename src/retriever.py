@@ -39,30 +39,39 @@ generation 파트에 넘길 때는 파일로 뽑는다. 그쪽은 TEI 도 인덱
     python src/retriever.py "이 사업의 예산이 얼마야?"
     python src/retriever.py --notices "클라우드 전환" --min-budget 300000000
 
-## 왜 이 설정인가 (2026-08-26 실측)
+## 왜 이 설정인가 (2026-08-28 실측)
 
-`data/eval_qa.json` 133문항(요구사항·배점·의역·없음)으로 일곱 조합을 쟀다.
+팀원이 만든 `data/eval_qa_80.json` 으로 여덟 조합을 쟀다. MRR 이다.
+공고를 한정한 경우(scoped)가 실제 UI 2단계 조건이다.
 
-    설정                    배점    요구사항   의역
-    BM25                   0.050  0.500  0.550
-    Dense                  0.150  0.725  0.550
-    Dense+머리말             0.575  0.925  0.475
-    Dense+머리말+Rerank      0.950  0.975  0.600   ← 전 유형 1위
-    Hybrid                 0.100  0.775  0.550
-    Hybrid+Rerank          0.400  0.675  0.575
+    설정                       배점   요구사항   의역
+    BM25                     0.611  0.704  0.618
+    Dense                    0.608  0.648  0.586
+    Dense+머리말               0.633  0.694  0.624
+    Dense+머리말+Rerank        0.667  0.722  0.679
+    Hybrid                   0.621  0.711  0.632
+    Hybrid+Rerank            0.867  0.778  0.712   ← 전 유형 1위
+    Hybrid+머리말              0.686  0.705  0.650
 
-- **머리말(`[사업명]`)을 붙인 인덱스**를 쓴다. 안 붙이면 배점이 0.150 으로 떨어진다.
-  공고를 하나로 좁혀서(`doc_ids`) 재도 이 차이가 그대로라, 단순히 "그 공고로
-  몰아주는" 효과가 아니다.
-- **BM25 를 섞지 않는다.** RRF 는 순위 융합이라, 배점에서 0.050 밖에 못 찾는 BM25 가
-  엉뚱한 청크를 올리면 Dense 의 좋은 1등이 밀린다 (Hybrid+머리말 0.275 < Dense+머리말 0.575).
-- **리랭커가 승패를 가른다.** 배점 0.575 → 0.950. 다만 3배 느리다(0.42초 → 1.2초/질문).
-- 자르기는 `recursive/1200/200`. 3000/400 은 쉬운 질문 세트로 골랐던 값이고,
-  어려운 세트에서는 1200 이 이긴다 (의역 0.475 → 0.600).
+- **BM25 를 섞는다.** RFP 는 글자의 60~80%가 표 안에 있고, 표가 많은 문서에서는
+  어휘 매칭이 강하다는 게 문헌과도 맞는다. 단독으로도 Dense 를 이긴다.
+- **머리말(`[사업명]`)은 안 쓴다.** BM25 와 섞을 때는 머리말 없는 인덱스가 낫다.
+  예전에 머리말이 결정적으로 보였던 건 그때 평가 질문이 100% 「사업명」으로
+  시작했기 때문이다. 팀원 세트는 13% 뿐이고 실사용도 그쪽에 가깝다.
+- **리랭커가 승패를 가른다.** 배점 0.621 → 0.867. 3배 느리다.
+- 공고를 한정하지 않으면 요구사항만 Dense+머리말+Rerank 가 낫다(0.722 vs 0.648).
+  BM25 가 `SFR` 같은 공용 어휘로 엉뚱한 공고를 끌어오기 때문이다. 2단계는
+  이미 공고가 정해져 있으니 문제되지 않는다.
+- 자르기는 `recursive/1200/200`, 전처리본은 마크다운 표 문법을 걷어낸 것.
+
+**남은 문제** — 의역 40문항 중 못 찾는 14개는 순위 문제가 아니다. 후보밖 8개
+(정답 청크가 후보 30개에 못 듦), 정답없음 6개(청크 경계가 정답을 자름).
+순위밀림은 0개다. parent-child 청킹이 다음 후보다.
 """
 
 import argparse
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -73,39 +82,65 @@ for _folder in (_ROOT / "src", _ROOT):
     if str(_folder) not in sys.path:
         sys.path.insert(0, str(_folder))
 
+import chunking
+from config import retrieval as cfg
 from config import settings
 from evaluation import fit_budget
 from models import load_embedder, load_reranker
-from pieces import Dense, Pipeline, Rerank
+from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
-CHUNKS = "cleaned_documents__recursive_1200_200"
-INDEX = f"{CHUNKS}__header__tei"
-POOL = 30  # 리랭커에 넘길 후보 수. 10/30/60/100 을 재고 고른 값이다 —
-#          10 은 부족하고(배점 0.850), 60·100 은 30 과 ±1문항 차이인데 시간만 2~3배다.
-TOP_K = 8  # 리랭커가 남길 수. 예산에서 다시 잘리므로 넉넉히 준다
+# **설정은 config/settings.py 한 곳에만 있다.** 여기에 상수를 다시 적으면
+# 그게 굳어서, settings 를 고쳐도 API 는 옛 코퍼스로 답하게 된다. 실제로 그랬다.
+CHUNKS = cfg.chunk_name()
+INDEX = cfg.index_name()
+POOL = cfg.POOL
+TOP_K = cfg.TOP_K
 
 
-@lru_cache(maxsize=4)
-def _load(index, embed, rerank):
-    """인덱스와 리랭커를 한 번만 올린다.
+@lru_cache(maxsize=2)
+def _store(index, embed):
+    """FAISS 인덱스만 연다. 공고 찾기(1단계)는 이것만 있으면 된다."""
+    return load_store(index, load_embedder(embed))
 
-    질문마다 다시 올리면 FAISS 를 매번 디스크에서 읽는다. 캐시가 이걸 막는다.
+
+@lru_cache(maxsize=2)
+def _load(index, chunks, embed, rerank):
+    """인덱스·청크·리랭커를 한 번만 올린다.
+
+    질문마다 다시 올리면 FAISS 를 매번 디스크에서 읽고 BM25 를 다시 짓는다.
+    **BM25 가 비싸다** — 청크 9,500개를 형태소 분석해야 해서 수십 초 걸리고
+    메모리도 수백 MB 다. 그래서 첫 호출만 느리고 그 뒤로는 캐시가 받는다.
+    서비스에서는 뜰 때 한 번 불러 두는 게 낫다.
 
     Args:
-        index: 인덱스 이름.
+        index: FAISS 인덱스 이름.
+        chunks: BM25 가 쓸 청크 이름 (머리말 없는 쪽).
         embed: 임베딩 종류 (tei / local / fake).
         rerank: 리랭커 종류 (tei / local / fake).
 
     Returns:
-        `(FAISS 인덱스, 리랭커)`.
+        `(FAISS 인덱스, 청크 리스트, 리랭커)`.
     """
-    return load_store(index, load_embedder(embed)), load_reranker(rerank)
+    started = time.time()
+    store = _store(index, embed)
+    chunk_list = chunking.load_chunks(chunks)
+    BM25(chunk_list, k=POOL)  # 여기서 색인을 지어 캐시에 넣는다
+    reranker = load_reranker(rerank)
+    print(f"검색기 준비 {time.time() - started:.1f}초 (청크 {len(chunk_list):,}개)")
+    return store, chunk_list, reranker
 
 
 def retrieve(
-    query, doc_ids=None, top_k=TOP_K, pool=POOL, index=INDEX, embed="tei", rerank="tei"
+    query,
+    doc_ids=None,
+    top_k=TOP_K,
+    pool=POOL,
+    index=INDEX,
+    chunks=CHUNKS,
+    embed="tei",
+    rerank="tei",
 ):
     """질문에 맞는 청크를 찾는다.
 
@@ -114,16 +149,25 @@ def retrieve(
         doc_ids: 주면 그 공고들 안에서만 찾는다. 요약 카드를 만들 때 쓴다.
         top_k: 리랭커가 남길 청크 수.
         pool: 리랭커에 넘길 후보 수. 크면 정확하고 느리다.
-        index: 인덱스 이름. 기본값은 머리말이 붙은 것이다.
+        index: FAISS 인덱스 이름.
+        chunks: BM25 가 쓸 청크 이름.
         embed: 임베딩 종류.
         rerank: 리랭커 종류.
 
     Returns:
         점수 순 Document 리스트. `metadata` 에 doc_id·title·agency·chunk_id 가 있다.
     """
-    store, reranker = _load(index, embed, rerank)
+    store, chunk_list, reranker = _load(index, chunks, embed, rerank)
+    # BM25 는 같은 청크 묶음이면 색인을 돌려쓴다. 그래서 질문마다 만들어도 싸다.
     pipeline = Pipeline([
-        Dense(store, k=pool, doc_ids=doc_ids),
+        Hybrid(
+            [
+                Dense(store, k=pool, doc_ids=doc_ids),
+                BM25(chunk_list, k=pool, doc_ids=doc_ids),
+            ],
+            k=pool,
+            pool=pool,
+        ),
         Rerank(reranker, k=top_k),
     ])
     return pipeline(query).chunks
@@ -177,6 +221,23 @@ def fit_context(chunks, budget=None):
     return kept
 
 
+def _drop_nan(row):
+    """dict 안의 NaN 을 None 으로 바꾼다.
+
+    메타데이터가 pandas 에서 와서 값이 비면 float('nan') 이 섞여 나온다.
+    Starlette 의 JSONResponse 는 `allow_nan=False` 라 NaN 하나에 응답 전체가
+    끊긴다. 500 도 아니고 연결이 그냥 끊겨서 브라우저에는 "Failed to fetch"
+    로만 보인다 — 원인을 찾는 데 한참 걸린다.
+
+    Args:
+        row: 메타데이터에서 만든 dict.
+
+    Returns:
+        NaN 자리가 None 으로 바뀐 새 dict.
+    """
+    return {k: None if isinstance(v, float) and v != v else v for k, v in row.items()}
+
+
 def _passes(row, min_budget, max_budget, agency, closes_after):
     """공고 하나가 조건을 통과하는지.
 
@@ -203,6 +264,22 @@ def _passes(row, min_budget, max_budget, agency, closes_after):
     return True
 
 
+def _plain(value):
+    """JSON 으로 나갈 수 있는 값으로 바꾼다.
+
+    예산이 없는 공고가 있어서 `budget` 이 NaN 으로 온다. 파이썬 `json` 은
+    기본으로 NaN 을 통과시키지만 **Starlette 은 `allow_nan=False`** 라
+    ValueError 로 죽는다. 응답을 만드는 중이라 스택만 남고 원인이 안 보인다.
+
+    Args:
+        value: 메타데이터 값.
+
+    Returns:
+        NaN 이면 None, 아니면 그대로.
+    """
+    return None if isinstance(value, float) and value != value else value
+
+
 def search_notices(
     query,
     top_n=10,
@@ -213,6 +290,8 @@ def search_notices(
     closes_after=None,
     index=INDEX,
     embed="tei",
+    chunks=CHUNKS,
+    rerank=None,
 ):
     """자연어로 공고를 찾는다. **1단계 — 어떤 공고를 볼지 고르는 화면.**
 
@@ -220,8 +299,19 @@ def search_notices(
     상위에 들면 그만큼 점수가 올라간다(RRF). 예산·기관·마감일 같은 조건은
     임베딩이 아니라 **메타데이터로 거른다** — 숫자 비교를 벡터에 맡기면 틀린다.
 
-    리랭커는 안 쓴다. 후보가 200개라 느리고, 공고 점수는 여러 청크의 합이라
-    한 청크를 다시 채점해도 순위가 크게 안 바뀐다.
+    **리랭커는 안 쓴다 (2026-08-28 실측, 62문항).** 이 화면은 사람이 목록에서
+    고르므로 1위 정확도보다 **목록 안에 있는지(Top10)** 가 중요하다.
+
+        설정            MRR   Top1  Top10   질문당
+        Dense          0.633 0.532 0.806   0.4초
+        Hybrid         0.663 0.565 0.839   0.7초   ← 채택
+        Dense+Rerank   0.687 0.613 0.839   3.0초
+        Hybrid+Rerank  0.680 0.581 0.871   3.3초
+
+    리랭커는 Top10 을 2문항 더 올리는 대신 질문당 3초를 더 쓴다. 검색창에서
+    3초는 못 쓴다. BM25 를 섞는 건 0.3초라 그건 켠다.
+    2단계(`retrieve`)는 모델이 직접 골라야 하므로 리랭커를 쓴다 — 거기선 순위가
+    곧 답이다. 다시 재려면 `scripts/eval_notices.py`.
 
     Args:
         query: 자연어 질의. "클라우드 전환", "장애인 접근성 개선" 같은 것.
@@ -233,13 +323,25 @@ def search_notices(
         closes_after: 이 날짜 이후 마감 (`"2024-04-01"`).
         index: 인덱스 이름.
         embed: 임베딩 종류.
+        chunks: BM25 가 쓸 청크 이름. None 이면 Dense 만 쓴다.
+        rerank: 리랭커 종류 (tei / local). 주면 묶기 전에 다시 채점한다.
+            기본은 끔 — 3초가 더 든다.
 
     Returns:
         점수 순 공고 리스트.
         `[{doc_id, title, agency, budget, bid_close_at, summary, score, 청크수, excerpt}]`
     """
-    store, _ = _load(index, embed, "fake")  # 리랭커는 안 쓴다
-    hits = Dense(store, k=pool).search(query, pool)
+    store = _store(index, embed)
+    searcher = Dense(store, k=pool)
+    if chunks:
+        searcher = Hybrid(
+            [searcher, BM25(chunking.load_chunks(chunks), k=pool)], k=pool, pool=pool
+        )
+    hits = searcher.search(query, pool)
+    if rerank:
+        hits = Rerank(load_reranker(rerank), k=pool)(
+            State(question=query, chunks=hits)
+        ).chunks
 
     found = {}
     for rank, chunk in enumerate(hits, 1):
@@ -247,17 +349,19 @@ def search_notices(
         doc_id = meta.get("doc_id")
         row = found.get(doc_id)
         if row is None:
-            row = found[doc_id] = {
-                "doc_id": doc_id,
-                "title": meta.get("title"),
-                "agency": meta.get("agency"),
-                "budget": meta.get("budget"),
-                "bid_close_at": meta.get("bid_close_at"),
-                "summary": meta.get("summary"),
-                "score": 0.0,
-                "청크수": 0,
-                "excerpt": " ".join(chunk.page_content.split())[:200],
-            }
+            row = found[doc_id] = _drop_nan(
+                {
+                    "doc_id": doc_id,
+                    "title": _plain(meta.get("title")),
+                    "agency": _plain(meta.get("agency")),
+                    "budget": _plain(meta.get("budget")),
+                    "bid_close_at": _plain(meta.get("bid_close_at")),
+                    "summary": _plain(meta.get("summary")),
+                    "score": 0.0,
+                    "청크수": 0,
+                    "excerpt": " ".join(chunk.page_content.split())[:200],
+                }
+            )
         row["score"] += 1.0 / (60 + rank)  # RRF. 상수 60 은 관례값
         row["청크수"] += 1
 
@@ -297,13 +401,15 @@ def sources(chunks):
         `[{"n", "doc_id", "title", "agency", "chunk_id"}]`. 번호는 1부터.
     """
     return [
-        {
-            "n": i,
-            "doc_id": chunk.metadata.get("doc_id"),
-            "title": chunk.metadata.get("title"),
-            "agency": chunk.metadata.get("agency"),
-            "chunk_id": chunk.metadata.get("chunk_id"),
-        }
+        _drop_nan(
+            {
+                "n": i,
+                "doc_id": chunk.metadata.get("doc_id"),
+                "title": chunk.metadata.get("title"),
+                "agency": chunk.metadata.get("agency"),
+                "chunk_id": chunk.metadata.get("chunk_id"),
+            }
+        )
         for i, chunk in enumerate(chunks, 1)
     ]
 
@@ -439,8 +545,13 @@ def main():
     )
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--index", default=INDEX)
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
-    parser.add_argument("--rerank", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument("--chunks", default=CHUNKS, help="BM25 가 쓸 청크 이름")
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
+    parser.add_argument(
+        "--rerank", default="tei", choices=["tei", "local", "cohere", "fake"]
+    )
     args = parser.parse_args()
 
     if args.export:
@@ -450,6 +561,7 @@ def main():
             out,
             top_k=args.top_k,
             index=args.index,
+            chunks=args.chunks,
             embed=args.embed,
             rerank=args.rerank,
         )
@@ -487,6 +599,7 @@ def main():
         doc_ids=args.doc_ids,
         top_k=args.top_k,
         index=args.index,
+        chunks=args.chunks,
         embed=args.embed,
         rerank=args.rerank,
     )

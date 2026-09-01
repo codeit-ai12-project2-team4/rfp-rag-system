@@ -17,6 +17,7 @@ OpenAI 를 쓰면 돈이 나간다. 그래서 이름을 붙여 저장하고 다�
 """
 
 import argparse
+import json
 import shutil
 import sys
 import warnings
@@ -51,6 +52,89 @@ def index_path(name):
     return settings.VECTORSTORE / name
 
 
+def fingerprint(embedder):
+    """이 임베더가 어떤 모델인지 한 줄로.
+
+    Args:
+        embedder: langchain `Embeddings` 객체.
+
+    Returns:
+        str: 모델 이름. 알 수 없으면 클래스 이름.
+    """
+    for attr in ("model_id", "model", "model_name"):
+        got = getattr(embedder, attr, None)
+        if isinstance(got, str) and got:
+            return got
+    return type(embedder).__name__
+
+
+def stamp(path, embedder, store):
+    """어떤 모델로 만든 인덱스인지 옆에 적어 둔다.
+
+    Args:
+        path (Path): 인덱스 폴더.
+        embedder: 만들 때 쓴 임베딩 객체.
+        store: 만들어진 FAISS 인덱스.
+    """
+    (path / "meta.json").write_text(
+        json.dumps(
+            {
+                "model": fingerprint(embedder),
+                "dim": store.index.d,
+                "chunks": store.index.ntotal,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def verify(path, name, embedder, store):
+    """불러온 인덱스가 지금 임베더로 만든 게 맞는지 본다.
+
+    안 맞으면 faiss 가 `assert d == self.d` 로 죽는데, 그건 검색 첫 질문에서야
+    터지고 어디가 잘못됐는지 한 글자도 안 알려준다. **차원이 같은데 모델만 다른
+    경우는 죽지도 않는다** — BGE-m3 와 arctic 은 둘 다 1024 라 조용히 엉뚱한
+    결과가 나온다. 실제로 그렇게 하루를 버렸다.
+
+    Args:
+        path (Path): 인덱스 폴더.
+        name (str): 인덱스 이름 (오류 메시지에 쓴다).
+        embedder: 지금 쓰려는 임베딩 객체.
+        store: 불러온 FAISS 인덱스.
+
+    Returns:
+        불러온 인덱스 그대로.
+
+    Raises:
+        RuntimeError: 만들 때와 다른 모델일 때.
+    """
+    now = fingerprint(embedder)
+    meta = path / "meta.json"
+    rebuild = f"  python src/vectorstore.py --chunks {name.rsplit('__', 1)[0]} --force"
+
+    if meta.exists():
+        was = json.loads(meta.read_text()).get("model")
+        if was != now:
+            raise RuntimeError(
+                f"인덱스를 만든 모델과 다릅니다: {name}\n"
+                f"  만들 때  {was}\n"
+                f"  지금     {now}\n"
+                f"다시 만드세요:\n{rebuild}"
+            )
+        return store
+
+    # 도장이 없는 옛 인덱스는 차원만이라도 본다
+    dim = len(embedder.embed_query("차원 확인"))
+    if store.index.d != dim:
+        raise RuntimeError(
+            f"인덱스 차원이 안 맞습니다: {name}\n"
+            f"  인덱스 {store.index.d}차원 / 지금 임베더({now}) {dim}차원\n"
+            f"다시 만드세요:\n{rebuild}"
+        )
+    return store
+
+
 def build_store(chunks, embedder, name=None, force=False, verbose=True):
     """청크를 임베딩해 FAISS 인덱스를 만든다.
 
@@ -71,8 +155,13 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         if path.exists() and not force:
             if verbose:
                 print(f"저장된 인덱스를 불러옵니다: {path}")
-            return FAISS.load_local(
-                str(path), embedder, allow_dangerous_deserialization=True
+            return verify(
+                path,
+                name,
+                embedder,
+                FAISS.load_local(
+                    str(path), embedder, allow_dangerous_deserialization=True
+                ),
             )
 
     if verbose:
@@ -86,8 +175,9 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         if path.exists():
             shutil.rmtree(path)
         store.save_local(str(path))
+        stamp(path, embedder, store)
         if verbose:
-            print(f"인덱스 저장: {path}")
+            print(f"인덱스 저장: {path} ({fingerprint(embedder)}, {store.index.d}차원)")
     return store
 
 
@@ -113,7 +203,12 @@ def load_store(name, embedder):
             f"저장된 인덱스: {available or '(없음)'}\n"
             "먼저 만드세요:  python src/vectorstore.py --chunks <청크이름>"
         )
-    return FAISS.load_local(str(path), embedder, allow_dangerous_deserialization=True)
+    return verify(
+        path,
+        name,
+        embedder,
+        FAISS.load_local(str(path), embedder, allow_dangerous_deserialization=True),
+    )
 
 
 def list_stores():
@@ -190,7 +285,9 @@ def main():
         required=True,
         help="outputs/chunks 의 청크 이름 (python src/chunking.py 가 찍어 준다)",
     )
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "fake"])
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
     parser.add_argument("--name", help="인덱스 이름 (생략하면 청크이름__임베딩)")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 만든다")
     parser.add_argument(

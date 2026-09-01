@@ -3,11 +3,13 @@
 ## generation 파트가 볼 것은 두 개뿐이다
 
 ```python
-from src.retriever import retrieve_context      # 질문 → 발췌 문자열
-from src.generation import generate_answer      # 질문 + 발췌 → 답변
+from src.retriever import retrieve_context  # 질문 → 발췌 문자열
+from src.generation import generate_answer  # 질문 + 발췌 → 답변
 
 context = retrieve_context("이 사업의 예산이 얼마야?")
-result = generate_answer(model_key="mini", query="이 사업의 예산이 얼마야?", context=context)
+result = generate_answer(
+    model_key="mini", query="이 사업의 예산이 얼마야?", context=context
+)
 ```
 
 프로젝트 루트에서 실행하면 된다. `retriever.py` 가 경로를 알아서 잡는다.
@@ -36,7 +38,9 @@ python src/retriever.py --export
 import json
 
 for row in map(json.loads, open("contexts_eval_qa.jsonl", encoding="utf-8")):
-    result = generate_answer(model_key="mini", query=row["question"], context=row["context"])
+    result = generate_answer(
+        model_key="mini", query=row["question"], context=row["context"]
+    )
 ```
 
 ```json
@@ -119,7 +123,7 @@ from src.generation import generate_answer
 from config import settings
 from preprocessing import load_documents
 from models import load_embedder
-from pieces import Pipeline, Dense, Rerank    # 검색 부품. 밖에서는 쓸 일 없다
+from pieces import Pipeline, Dense, Rerank  # 검색 부품. 밖에서는 쓸 일 없다
 ```
 
 ## 실행 — 산출물을 만드는 건 src 안의 파일이다
@@ -170,3 +174,36 @@ def load_store(name, embedder):
 
 `chunking.py`, `vectorstore.py`, `retriever.py`, `preprocessing/run.py` 의 `main()`
 은 옮겼다. 나머지 파일은 아직 서술형이다.
+
+## api.py — 웹 UI 가 부르는 HTTP 경계
+
+프론트(Next.js)는 별도 repo 입니다. 파이썬 소스를 볼 이유가 없고 배포 주기도
+다릅니다. 둘을 잇는 건 이 파일뿐이라 **여기만 안 바뀌면 양쪽이 따로 움직입니다.**
+
+```bash
+uvicorn src.api:app --reload --port 8088
+open http://localhost:8088/docs      # 스펙 원본. 따로 문서 쓰지 않는다
+```
+
+| 엔드포인트 | 무엇 |
+|---|---|
+| `POST /search` | 자연어로 공고 찾기 (1단계). 리랭커 안 씀 |
+| `POST /ask` | 고른 공고 안에서 질문 (2단계). 답변 + `sources` |
+| `GET /models` | 드롭다운 채우기 |
+
+`/ask` 는 답변과 **출처를 같이** 돌려줍니다. 근거 없는 답은 입찰 담당자가
+안 씁니다. `answer` 의 `[1] [2]` 가 `sources[n]` 과 대응합니다.
+
+```json
+{ "ok": true, "answer": "배정예산은 87,000,000원입니다 [1]",
+  "sources": [{ "n": 1, "doc_id": "…", "title": "…", "agency": "…" }] }
+```
+
+`generate_answer()` 가 예외를 안 던지므로 실패해도 200 입니다. **`ok` 를 보세요.**
+
+새 엔드포인트를 붙일 때 — 여기서 검색·생성 로직을 쓰지 마세요. `retriever.py`
+와 `generation.py` 의 함수를 부르기만 합니다. 이 파일은 껍데기여야 평가
+스크립트와 UI 가 같은 코드를 씁니다.
+
+**시나리오 A/B 는 여기 없습니다.** 인프라 선택이지 고객 선택이 아니고,
+외부 API 를 고르면 NDA 문서가 밖으로 나갑니다. 배포 시점에 환경변수로 정합니다.
