@@ -20,6 +20,22 @@ import pandas as pd  # noqa: E402
 TYPES = ["배점", "요구사항", "의역"]
 
 
+def label(path):
+    """표에 쓸 이름. 파일명이 같으면 상위 폴더로 구분한다.
+
+    실행마다 폴더를 만들고 안에는 늘 `scoped.csv` 로 두므로, 파일명만 쓰면
+    두 열이 같은 이름이 된다.
+
+    Args:
+        path (str): 성적표 경로.
+
+    Returns:
+        str: 표에 쓸 이름.
+    """
+    p = Path(path)
+    return f"{p.parent.name}/{p.stem}" if p.parent.name.startswith(("v", "run")) else p.stem
+
+
 def load(path):
     """성적표 하나를 (유형, 설정) → MRR 로 읽는다.
 
@@ -44,7 +60,7 @@ def grid(paths):
     frames, counts = {}, None
     for path in paths:
         pivot, got = load(path)
-        frames[Path(path).stem.replace("grid_", "")] = pivot
+        frames[label(path).replace("grid_", "")] = pivot
         counts = got if counts is None else counts
 
     kinds = [k for k in TYPES if all(k in f.columns for f in frames.values())]
@@ -88,7 +104,7 @@ def main():
     if not setups:
         sys.exit("두 성적표에 공통인 설정이 없습니다")
 
-    name_a, name_b = Path(args.a).stem, Path(args.b).stem
+    name_a, name_b = label(args.a), label(args.b)
     print(f"\n{name_a} / {name_b}   (굵은 쪽이 이긴 칸)\n")
     header = "설정".ljust(28) + "".join(k.center(20) for k in kinds)
     print(header)

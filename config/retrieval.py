@@ -15,15 +15,25 @@
 생성 파트의 모델 설정은 `config/model_config.py` 에 따로 있다.
 """
 
-DOCS = "cleaned_documents_v4"
-HOW = "recursive"
-SIZE = 1500
-OVERLAP = 250
-EMBED = "tei"
-RERANK = "tei"
-POOL = 80  # 리랭커에 넘길 후보 수. 30/50/80/120 을 재고 골랐다
-TOP_K = 8  # 리랭커가 남길 수. 예산에서 다시 잘린다
-EVALSET = "eval_qa_both"
+# 환경변수로 한 번만 덮어쓸 수 있다. 새 전처리본이 왔을 때 파일을 안 고치고
+# 그대로 재보려는 것이다. 스크립트마다 인자를 뚫는 것보다 이게 짧고, 여기를
+# 읽는 것(prepare · compare_retrieval · retriever · api)이 전부 따라온다.
+#
+#     DOCS=cleaned_documents_v5 bash scripts/retrieval/nightly.sh
+#     DOCS=cleaned_documents_v5 SIZE=1200 python scripts/retrieval/prepare.py --build
+#
+# 좋다고 판단되면 그때 아래 기본값을 고친다.
+import os
+
+DOCS = os.environ.get("DOCS", "cleaned_documents_v4")
+HOW = os.environ.get("HOW", "recursive")
+SIZE = int(os.environ.get("SIZE", 1500))
+OVERLAP = int(os.environ.get("OVERLAP", 250))
+EMBED = os.environ.get("EMBED", "tei")
+RERANK = os.environ.get("RERANK", "tei")
+POOL = int(os.environ.get("POOL", 80))  # 리랭커에 넘길 후보 수. 30~120 을 재고 골랐다
+TOP_K = int(os.environ.get("TOP_K", 8))  # 리랭커가 남길 수. 예산에서 다시 잘린다
+EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):
