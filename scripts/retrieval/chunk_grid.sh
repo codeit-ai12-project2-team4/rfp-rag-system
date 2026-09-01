@@ -21,9 +21,8 @@ v3_rec1200:cleaned_documents_v3:recursive:1200:200
 v4_rec900:cleaned_documents_v4:recursive:900:150
 v4_rec1200:cleaned_documents_v4:recursive:1200:200
 v4_rec1500:cleaned_documents_v4:recursive:1500:250
-v4_sec900:cleaned_documents_v4:section:900:150
-v4_sec1200:cleaned_documents_v4:section:1200:200
-v4_sec1500:cleaned_documents_v4:section:1500:250
+v4_rec1800:cleaned_documents_v4:recursive:1800:300
+v4_rec2100:cleaned_documents_v4:recursive:2100:350
 "
 
 MODEL=$(curl -s -m 5 localhost:8085/info | python -c \
