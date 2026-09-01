@@ -35,11 +35,50 @@ def load(path):
     return pivot, counts
 
 
+def grid(paths):
+    """셋 이상을 한 표로. 부호 세기는 둘일 때만 뜻이 있다.
+
+    Args:
+        paths (list[str]): 성적표 경로들.
+    """
+    frames, counts = {}, None
+    for path in paths:
+        pivot, got = load(path)
+        frames[Path(path).stem.replace("grid_", "")] = pivot
+        counts = got if counts is None else counts
+
+    kinds = [k for k in TYPES if all(k in f.columns for f in frames.values())]
+    weights = counts.reindex(kinds).fillna(0)
+    setups = sorted(set.intersection(*(set(f.index) for f in frames.values())))
+
+    table = pd.DataFrame(
+        {
+            name: [
+                (frame.loc[setup, kinds] * weights).sum() / weights.sum()
+                for setup in setups
+            ]
+            for name, frame in frames.items()
+        },
+        index=setups,
+    ).round(3)
+
+    print(f"\n가중평균 MRR (문항 수 {dict(weights.astype(int))})\n")
+    print(table.to_string())
+    print(f"\n설정별 최고: {table.idxmax(axis=1).to_dict()}")
+    best = table.max().idxmax()
+    print(f"전체 최고: {best}  {table[best].max():.3f}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("a", help="비교할 성적표 (왼쪽)")
     parser.add_argument("b", help="기준 성적표 (오른쪽)")
+    parser.add_argument("rest", nargs="*", help="셋 이상이면 가중평균 표만 낸다")
     args = parser.parse_args()
+
+    if args.rest:
+        grid([args.a, args.b, *args.rest])
+        return
 
     left, counts = load(args.a)
     right, _ = load(args.b)
