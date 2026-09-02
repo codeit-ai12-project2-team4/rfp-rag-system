@@ -775,8 +775,30 @@ def _render_table(frame: dict) -> tuple[str, str]:
         [v if v is not None else "-" for v in row] for row in display_grid
     ]
 
+    # [표현 이원화] 표 형태에 따라 생성(LLM)용 렌더링 방식을 분기한다.
+    # - key-value(2열, 짧은 키): 이미 "키 값" 한 줄이라 그대로도 안전
+    # - 병합 셀 있음: Markdown 표는 병합을 표현 못 해서(빈 칸으로만 처리)
+    #   헤더-값 결합이 애매해짐 -> 행 단위로 "헤더: 값"을 명시하는
+    #   row-block 형태로 렌더링
+    # - 그 외(단순 격자): 기존처럼 Markdown 표
+    # 이 함수가 반환하는 텍스트는 "생성용" 원본이고, 검색/임베딩용 평문은
+    # 이후 strip_table_markup()이 이 결과에서 마크업만 제거해 만든다
+    # (렌더링을 두 번 하지 않고 한 번의 결과에서 파생시켜 정합성을 보장).
+    has_merged_cells = any(
+        cell["rowspan"] > 1 or cell["colspan"] > 1 for cell in frame["cells"].values()
+    )
+
     if cols == 2 and _is_keyvalue_table(grid):
         rendered = _render_keyvalue(filled_display)
+    elif has_merged_cells:
+        # [버그 수정] display_grid는 Markdown 표용으로 병합된 칸 중
+        # origin이 아닌 칸을 빈 문자열로 비워둔다(중복 출력 방지 목적).
+        # row-block은 "그 행 하나만 봐도 의미가 통해야" 하므로 정반대로,
+        # 병합 값이 spanned된 모든 행에 그대로 반복돼야 한다. 그래서
+        # 병합을 죽이지 않은 grid(셀 population 단계에서 이미 rowspan/
+        # colspan 범위 전체에 텍스트가 복제돼 있음)를 그대로 쓴다.
+        filled_full = [[v if v is not None else "-" for v in row] for row in grid]
+        rendered = _render_row_block(filled_full)
     else:
         rendered = _render_matrix(filled_display)
 
@@ -801,7 +823,38 @@ def _is_keyvalue_table(grid: list) -> bool:
 
 
 def _render_keyvalue(grid: list) -> str:
-    return "\n".join(f"{row[0].strip()} = {row[1].strip()}" for row in grid)
+    # [표 마커 완전 제거] "키 = 값"의 "="도 표에서 왔다는 걸 드러내는
+    # 마커로 보고 없앤다. 실험 결과 셀 구분자까지 없앤 순수 공백 구분
+    # 텍스트가 성능이 더 좋다고 판단되어, 그냥 공백으로 이어붙인다.
+    return "\n".join(f"{row[0].strip()} {row[1].strip()}" for row in grid)
+
+
+def _render_row_block(grid: list) -> str:
+    """병합 셀이 있는 표를 '[행 N] 헤더1: 값1 헤더2: 값2 ...' 형태로
+    렌더링한다.
+
+    [표현 이원화] Markdown 표는 rowspan/colspan을 표현할 방법이 없어서,
+    병합된 칸을 빈 칸으로 남기면(_render_table의 display_grid 처리) 그
+    행에서 어떤 값이 어떤 헤더에 속하는지가 다시 애매해진다. 병합 셀이
+    있는 표만 이 형태로 바꿔서, 행마다 헤더-값 쌍을 명시적으로 풀어쓴다.
+    한 행을 한 줄로 유지해 다른 행과 섞이지 않게 한다.
+
+    시간복잡도: O(행 수 * 열 수)
+    """
+
+    header = [cell.strip() for cell in grid[0]]
+    lines = []
+
+    for row_idx, row in enumerate(grid[1:], start=1):
+        pairs = [
+            f"{header[c]}: {row[c].strip()}"
+            for c in range(len(header))
+            if row[c].strip()
+        ]
+        if pairs:
+            lines.append(f"[행 {row_idx}] " + " ".join(pairs))
+
+    return "\n".join(lines)
 
 
 def _render_matrix(grid: list) -> str:
@@ -1238,57 +1291,209 @@ PATTERN_TABLE_ESCAPED_MARKUP = re.compile(r"\\([|-])")  # 중첩 표의 \| \- �
 # 남기는 진단 태그는 "[표 복원 실패: ...]"/"[표 부분 복원: ...]"이라 문자열이
 # 다르다. 그대로 쓰면 아무것도 안 지워지므로 실제 태그 문자열에 맞춰 고쳤다.
 PATTERN_TABLE_DEBUG_TAG = re.compile(r"\[표 (?:복원 실패|부분 복원)[^\]]{0,200}\]")
-PATTERN_TABLE_SEPARATOR_ROW = re.compile(
-    r"^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$", re.MULTILINE
-)  # |---|---|
-PATTERN_TABLE_EMPTY_ROW = re.compile(r"^\s*\|(\s*\|)*\s*$", re.MULTILINE)  # |||
+PATTERN_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")  # |셀|셀|  (구분행/빈행 포함)
+PATTERN_TABLE_SEPARATOR_ROW = re.compile(r"^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$")  # |---|---|
+PATTERN_TABLE_EMPTY_ROW = re.compile(r"^\s*\|(\s*\|)*\s*$")  # |||
 PATTERN_TABLE_BLANK_RUN = re.compile(r"\n{3,}")
+PATTERN_TABLE_CELL_SPLIT = re.compile(
+    r"(?<!\\)\|"
+)  # 이스케이프 안 된 |만 셀 구분자로 인식
+PATTERN_ROW_BLOCK_LINE = re.compile(r"^\[행 \d+\]\s*")  # _render_row_block 결과 줄
+
+
+def _split_table_row(line: str) -> list[str]:
+    """Markdown 표 한 줄을 셀 리스트로 쪼갠다.
+
+    이스케이프된 파이프(`\\|`)는 셀 내용(중첩 표)으로 보고 구분자로 쓰지
+    않는다. 셀 단위로 다시 `\\|`, `\\-` 이스케이프를 풀고 `<br>`을 칸 내부
+    줄바꿈이었던 자리이므로 공백으로 되돌린다.
+
+    시간복잡도: O(줄 길이)
+    """
+
+    inner = re.sub(r"^\s*\|", "", line.strip())
+    inner = re.sub(r"\|\s*$", "", inner)
+
+    cells = []
+    for raw_cell in PATTERN_TABLE_CELL_SPLIT.split(inner):
+        cell = PATTERN_TABLE_ESCAPED_MARKUP.sub(r"\1", raw_cell)
+        cell = cell.replace("<br>", " ")
+        cells.append(cell.strip())
+
+    return cells
+
+
+def _flatten_table_block(lines: list[str]) -> list[str]:
+    """연속된 Markdown 표 줄 묶음을 '헤더 값 헤더 값 ...' 행 단위 평문으로
+    바꾼다.
+
+    [핵심] 기존 방식은 헤더 줄과 값 줄을 각각 독립적으로 공백 구분
+    텍스트로 바꿔서, 헤더 "컬럼1 컬럼2 컬럼3"과 값 "1-1 2-1 3-1"이 서로
+    다른 줄로 떨어져 나왔다. 청크가 헤더 줄과 값 줄 사이에서 잘리거나
+    표가 여러 개 이어지면 어느 값이 어느 헤더의 것인지 위치 추론에만
+    의존해야 해서 의미가 끊길 위험이 있었다.
+
+    이 함수는 헤더 행(첫 줄)의 셀과 각 데이터 행의 셀을 같은 열 위치로
+    짝지어 "헤더 값" 쌍을 만들고, 한 데이터 행의 모든 쌍을 한 줄에
+    이어붙인다. 격자 기호(|, ---)는 사라지지만 헤더-값 결합은 같은 줄
+    안에서 유지된다. 행 간 줄바꿈은 그대로 둬서(수정 전과 동일하게) 행
+    하나가 다른 행과 한 줄로 섞이지는 않는다.
+
+    시간복잡도: O(행 수 * 열 수)
+    """
+
+    data_lines = [
+        line
+        for line in lines
+        if not PATTERN_TABLE_SEPARATOR_ROW.match(line)
+        and not PATTERN_TABLE_EMPTY_ROW.match(line)
+    ]
+
+    rows = [_split_table_row(line) for line in data_lines]
+    rows = [row for row in rows if any(cell for cell in row)]
+
+    if not rows:
+        return []
+
+    header, *data_rows = rows
+
+    if not data_rows:
+        # 헤더 행만 있고 데이터 행이 없으면(예: 표가 잘려 헤더만 남은 경우)
+        # 헤더라도 살려서 정보 손실을 막는다.
+        return [" ".join(cell for cell in header if cell)]
+
+    flattened_rows = []
+
+    for row in data_rows:
+        pairs = []
+        for col_idx, value in enumerate(row):
+            if not value:
+                continue
+            head = header[col_idx] if col_idx < len(header) else ""
+            pairs.append(f"{head} {value}".strip() if head else value)
+
+        if pairs:
+            flattened_rows.append(" ".join(pairs))
+
+    return flattened_rows
 
 
 def strip_table_markup(text: str) -> str:
-    """Markdown 표 문법을 없애고 셀 구분(· )만 남긴다.
+    """Markdown 표 문법을 없애되, 헤더-값 결합은 같은 줄에 유지한 채 순수
+    공백 구분 텍스트로 만든다.
 
-    셀 경계(`·`)는 남긴다. 행/열 관계까지 지우면 배점표 같은 표가 뭉개진다.
-    `<br>`은 셀 안(그 줄에 `|`가 있는 경우)이면 칸 내부 줄바꿈이었던
-    것이므로 공백으로, 셀 밖(그 줄에 `|`가 없는 경우)이면 원래 의도대로
-    줄바꿈으로 되돌린다.
+    [실험 결과 반영] 격자(테두리 파이프, 구분행)를 걷어내고 셀 값을
+    공백으로 이어붙인 평문이 Markdown 그리드보다 검색 성능이 좋다는 것은
+    기존 실험으로 확인됨. 다만 헤더 줄과 값 줄을 따로따로 공백 텍스트로
+    바꾸면 헤더-값 대응이 줄 위치 추론에만 의존하게 되는 문제가 있어,
+    표 블록을 통째로 파싱해 각 데이터 행에 헤더를 인라인으로 묶어주는
+    방식으로 바꿨다(`_flatten_table_block` 참고). 값이 어느 헤더에
+    속하는지가 텍스트 자체에 남기 때문에 청크가 표 중간에서 잘려도 행
+    단위로는 의미가 보존된다.
+
+    이 함수는 `|`로 둘러싸인 표 형태 줄과 `_render_row_block`이 만든
+    "[행 N] 헤더: 값 ..." 줄만 건드리므로, 그 외(`|`도 `[행 N]` 태그도
+    없는) 계층/불릿 마커(□■○◦※•▶▷), 목차/섹션 제목(Ⅰ.Ⅱ.Ⅲ.), 활동/과업
+    번호(Activity N.N.N), 법률/계약 조항(제N조, ①②...)은 전혀 영향을
+    받지 않는다. `_render_keyvalue`가 만든 2열 표(이미 "키 값" 형태라
+    `|`도 `[행 N]`도 없음)도 손대지 않는다 - 이미 헤더-값이 한 줄에 묶여
+    있어 그대로 둬도 안전하다.
 
     Args:
-        text: clean_text_verbose까지 끝난 정제 텍스트(page_content).
+        text: `_render_table`이 표 형태별로 렌더링을 마친, 생성(LLM)용
+            원본 텍스트(`clean_text_verbose`까지 끝난 상태).
 
     Returns:
-        str: 구분행/빈 행/진단 태그를 지우고 `|`를 `·`로 바꾼 문자열.
+        str: 표 마크업을 제거하고, 데이터 행마다 "헤더 값" 쌍을 이어붙인
+        검색/임베딩용 평문.
     """
-
-    # 중첩 표는 안쪽 파이프가 이스케이프돼 온다. 먼저 풀어야 아래 규칙이 먹는다.
-    text = PATTERN_TABLE_ESCAPED_MARKUP.sub(r"\1", text)
 
     # 표 진단 태그(실패/부분복원)는 report/warnings에서 이미 집계했으니
     # 본문(임베딩 대상)에는 남길 필요가 없다.
     text = PATTERN_TABLE_DEBUG_TAG.sub("", text)
 
-    # |---|---| 구분행, ||| 같은 빈 행 제거
-    text = PATTERN_TABLE_SEPARATOR_ROW.sub("", text)
-    text = PATTERN_TABLE_EMPTY_ROW.sub("", text)
+    lines = text.split("\n")
+    output_lines: list[str] = []
+    table_buffer: list[str] = []
 
-    def _convert_br(line: str) -> str:
-        if "|" in line:
-            return line.replace("<br>", " ")
-        return line.replace("<br>", "\n")
+    def _flush_table_buffer() -> None:
+        if table_buffer:
+            output_lines.extend(_flatten_table_block(table_buffer))
+            table_buffer.clear()
 
-    text = "\n".join(_convert_br(line) for line in text.split("\n"))
+    for line in lines:
+        if PATTERN_TABLE_ROW.match(line):
+            table_buffer.append(line)
+            continue
 
-    # 줄 맨 앞/끝의 | (표 테두리)는 버리고, 셀 사이에 남은 |만 · 로 바꾼다.
-    text = re.sub(r"^\s*\|\s*", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\s*\|\s*$", "", text, flags=re.MULTILINE)
-    text = text.replace("|", " · ")
+        _flush_table_buffer()
 
-    # 표만 있다가 비어버린 줄(공백/· 만 남은 줄) 제거
-    text = re.sub(r"^[\s·]*$", "", text, flags=re.MULTILINE)
+        row_block_match = PATTERN_ROW_BLOCK_LINE.match(line)
+        if row_block_match:
+            # "[행 N] 헤더1: 값1 헤더2: 값2" -> "헤더1 값1 헤더2 값2"
+            # 태그와 콜론만 걷어내고, 헤더-값이 같은 줄에 있다는 결합
+            # 정보는 그대로 유지한다.
+            content = line[row_block_match.end() :].replace(":", "")
+            content = re.sub(r"[ \t]{2,}", " ", content).strip()
+            output_lines.append(content)
+            continue
 
+        # 표 밖(그 줄에 |가 없는 경우)의 <br>은 원래 의도대로 줄바꿈으로 되돌린다.
+        output_lines.append(line.replace("<br>", "\n"))
+
+    _flush_table_buffer()
+
+    text = "\n".join(output_lines)
+
+    # 표만 있다가 비어버린 줄(공백만 남은 줄) 제거
+    text = re.sub(r"^[ \t]*$", "", text, flags=re.MULTILINE)
     text = PATTERN_TABLE_BLANK_RUN.sub("\n\n", text)
 
     return text.strip()
+
+
+PATTERN_TABLE_MARKUP_LEFTOVERS = {
+    "잔존_파이프": re.compile(r"\|"),
+    "잔존_br": re.compile(r"<br>"),
+    "잔존_구분행": re.compile(r"^\s*\|?\s*:?-{2,}", re.MULTILINE),
+    "잔존_진단태그": re.compile(r"\[표 (?:복원 실패|부분 복원)"),
+    "잔존_행블록태그": re.compile(r"\[행 \d+\]"),
+}
+
+
+def verify_no_table_markup(
+    df: pd.DataFrame, text_col: str = "clean_text"
+) -> pd.DataFrame:
+    """strip_table_markup이 실제로 다 걷어냈는지 QA용으로 검증한다.
+
+    run_pipeline이 반환한 df(또는 write_jsonl에 쓰인 것과 같은 df)를 그대로
+    넣으면 된다. text_col을 "clean_text"(문서 단위 df)나 "page_content"
+    (청크 단위 df)로 바꿔가며 쓸 수 있다.
+
+    Args:
+        df: 검사할 DataFrame. text_col 컬럼과, 있으면 "파일명"/"source"
+            컬럼을 사용한다.
+        text_col: 검사할 텍스트가 담긴 컬럼명.
+
+    Returns:
+        pd.DataFrame: 표 마크업이 남아있는 문서만 담은 표(사유별 개수 포함).
+        비어 있으면 전부 통과한 것.
+    """
+
+    rows = []
+
+    for _, row in df.iterrows():
+        text = row.get(text_col) or ""
+        hits = {
+            name: len(pattern.findall(text))
+            for name, pattern in PATTERN_TABLE_MARKUP_LEFTOVERS.items()
+        }
+
+        if any(hits.values()):
+            identifier = row.get("파일명", row.get("source"))
+            rows.append({"파일명": identifier, **hits})
+
+    return pd.DataFrame(rows)
 
 
 # ============================================================
@@ -1391,6 +1596,7 @@ def process_document(path: Path) -> dict:
         # hwp_raw가 채택되지 못한 이유 (성공한 문서라도 조용한 폴백을 추적하기 위함)
         "hwp_raw_skipped_reason": extraction.attempted_errors.get("hwp_raw"),
         "clean_text": "",
+        "clean_text_for_generation": "",
         "_warnings": [],
     }
     base.update({k: None for k in FIELD_ALIASES})
@@ -1400,10 +1606,13 @@ def process_document(path: Path) -> dict:
 
     clean, warnings_list = clean_text_verbose(extraction.text)
 
-    # [표 구조 제거] 표 성공/부분/실패 판정과 경고 집계(위 tables_failed/
-    # tables_partial)는 fill_ratio 기준 그대로 유지하고, 실제 코퍼스에
-    # 들어갈 텍스트만 Markdown 격자를 걷어낸 평문으로 바꾼다.
-    clean = strip_table_markup(clean)
+    # [표현 이원화] clean은 _render_table이 표 형태별로(단순 격자는
+    # Markdown, 병합 셀은 row-block, key-value는 그대로) 이미 구조화해
+    # 놓은 상태 - 이걸 그대로 생성(LLM)용으로 쓴다. 검색/임베딩용은 여기서
+    # 마크업만 걷어낸 평문을 별도로 만든다. 표 성공/부분/실패 판정과 경고
+    # 집계(위 tables_failed/tables_partial)는 fill_ratio 기준 그대로 유지.
+    clean_for_generation = clean
+    clean_for_embedding = strip_table_markup(clean)
 
     if extraction.tables_failed > 0:
         warnings_list.append(
@@ -1416,7 +1625,8 @@ def process_document(path: Path) -> dict:
             f"표 {extraction.tables_total}개 중 {extraction.tables_partial}개 부분 복원"
         )
 
-    base["clean_text"] = clean
+    base["clean_text"] = clean_for_embedding
+    base["clean_text_for_generation"] = clean_for_generation
     base["_warnings"] = warnings_list
     base.update(extract_metadata(extraction.text))
 
@@ -1885,13 +2095,17 @@ def write_jsonl(
     """
 
     metadata_columns = [
-        col for col in df.columns if col not in ("파일명", "clean_text")
+        col
+        for col in df.columns
+        if col not in ("파일명", "clean_text", "clean_text_for_generation")
     ]
 
     with open(path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
             record = {
-                "page_content": row["clean_text"] or "",
+                "page_content": row["clean_text"] or "",  # 검색/임베딩용 (평문)
+                "page_content_for_generation": row.get("clean_text_for_generation")
+                or "",  # 생성/LLM 컨텍스트용 (표 형태별 구조 유지)
                 "metadata": {
                     "source": row["파일명"],
                     **{col: row[col] for col in metadata_columns},
@@ -1909,19 +2123,30 @@ def write_jsonl(
 
     with open(chunk_output_path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
-            chunks = chunk_text(
-                row["clean_text"] or "",
+            # [표현 이원화 + 청킹 정합성] 구조가 살아있는 생성용 텍스트를
+            # 먼저 청크로 자르고, 검색/임베딩용은 "같은 청크"에 strip_table_
+            # markup을 적용해서 파생시킨다. 두 텍스트를 따로따로 청킹하면
+            # 표 마크업 유무로 길이가 달라져 청크 경계가 어긋날 수 있는데,
+            # 이 순서(생성용 청킹 -> 임베딩용은 그 청크에서 파생)를 쓰면
+            # chunk_index가 항상 같은 내용을 가리키는 게 구조적으로 보장된다.
+            generation_source = (
+                row.get("clean_text_for_generation") or row["clean_text"] or ""
+            )
+            generation_chunks = chunk_text(
+                generation_source,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
 
-            for i, chunk in enumerate(chunks):
+            for i, gen_chunk in enumerate(generation_chunks):
+                embedding_chunk = strip_table_markup(gen_chunk)
                 record = {
-                    "page_content": chunk,
+                    "page_content": embedding_chunk,  # 검색/임베딩용
+                    "page_content_for_generation": gen_chunk,  # 생성/LLM 컨텍스트용
                     "metadata": {
                         "source": row["파일명"],
                         "chunk_index": i,
-                        "chunk_total": len(chunks),
+                        "chunk_total": len(generation_chunks),
                         **{col: row[col] for col in metadata_columns},
                     },
                 }
@@ -1987,23 +2212,3 @@ if __name__ == "__main__":
         OUTPUT_DIR,
         original_metadata_csv=ORIGINAL_METADATA_CSV,
     )
-
-
-"""
-==================================================
-실행 예시
-==================================================
-
-from pathlib import Path
-
-from rfp_preprocessing_pipeline import run_pipeline
-
-df, report = run_pipeline(
-    data_dir=Path("C:\\Users\\asd\\Desktop\\중급 프젝\\v2_chosim\\rfp-rag-system\\data\\files"),
-    output_dir=Path("./output"),
-    original_metadata_csv=Path(
-        "C:\\Users\\asd\\Desktop\\중급 프젝\\v2_chosim\\rfp-rag-system\\data\\data_list.csv"
-    ),
-)
-
-"""
