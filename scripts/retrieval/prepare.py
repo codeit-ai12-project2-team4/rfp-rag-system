@@ -77,6 +77,13 @@ def check(build=False):
     print(f"\n[2] 청크  {path.name}")
     if path.exists():
         print(f"    O  {sum(1 for _ in open(path)):,}개")
+    elif cfg.CHUNKS:
+        # 전처리팀이 잘라 준 청크다. chunking.py 로 만들면 이름만 비슷하고
+        # 표 원자성도 검색용 길이 기준도 없는 다른 물건이 나온다. 그리고
+        # 이름이 달라서 이 검사는 그대로 실패한다 — 시간만 버린다.
+        print("    X 없습니다. 전처리팀 산출물이라 여기서는 못 만듭니다")
+        print(f"      python scripts/retrieval/ingest.py --docs {cfg.DOCS}")
+        return False
     elif build:
         ok = run("src/chunking.py", "--docs", cfg.DOCS, "--how", cfg.HOW,
                  "--size", cfg.SIZE, "--overlap", cfg.OVERLAP) and ok
