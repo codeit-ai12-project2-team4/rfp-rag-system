@@ -744,7 +744,7 @@ def _render_table(frame: dict) -> tuple[str, str]:
             for r in range(row0, min(row0 + cell["rowspan"], rows)):
                 for c in range(col0, min(col0 + cell["colspan"], cols)):
                     grid[r][c] = cell["text"]
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # [버그 수정] 원본 코드는 RuntimeError만 잡았는데, 여기서 실제로
         # 날 수 있는 오류(IndexError 등)는 RuntimeError가 아니라서 사실상
         # 한 번도 안 잡혔다. 사용자가 실제 100건 실행에서 동일 패턴의
@@ -775,8 +775,30 @@ def _render_table(frame: dict) -> tuple[str, str]:
         [v if v is not None else "-" for v in row] for row in display_grid
     ]
 
+    # [표현 이원화] 표 형태에 따라 생성(LLM)용 렌더링 방식을 분기한다.
+    # - key-value(2열, 짧은 키): 이미 "키 값" 한 줄이라 그대로도 안전
+    # - 병합 셀 있음: Markdown 표는 병합을 표현 못 해서(빈 칸으로만 처리)
+    #   헤더-값 결합이 애매해짐 -> 행 단위로 "헤더: 값"을 명시하는
+    #   row-block 형태로 렌더링
+    # - 그 외(단순 격자): 기존처럼 Markdown 표
+    # 이 함수가 반환하는 텍스트는 "생성용" 원본이고, 검색/임베딩용 평문은
+    # 이후 strip_table_markup()이 이 결과에서 마크업만 제거해 만든다
+    # (렌더링을 두 번 하지 않고 한 번의 결과에서 파생시켜 정합성을 보장).
+    has_merged_cells = any(
+        cell["rowspan"] > 1 or cell["colspan"] > 1 for cell in frame["cells"].values()
+    )
+
     if cols == 2 and _is_keyvalue_table(grid):
         rendered = _render_keyvalue(filled_display)
+    elif has_merged_cells:
+        # [버그 수정] display_grid는 Markdown 표용으로 병합된 칸 중
+        # origin이 아닌 칸을 빈 문자열로 비워둔다(중복 출력 방지 목적).
+        # row-block은 "그 행 하나만 봐도 의미가 통해야" 하므로 정반대로,
+        # 병합 값이 spanned된 모든 행에 그대로 반복돼야 한다. 그래서
+        # 병합을 죽이지 않은 grid(셀 population 단계에서 이미 rowspan/
+        # colspan 범위 전체에 텍스트가 복제돼 있음)를 그대로 쓴다.
+        filled_full = [[v if v is not None else "-" for v in row] for row in grid]
+        rendered = _render_row_block(filled_full)
     else:
         rendered = _render_matrix(filled_display)
 
@@ -805,6 +827,34 @@ def _render_keyvalue(grid: list) -> str:
     # 마커로 보고 없앤다. 실험 결과 셀 구분자까지 없앤 순수 공백 구분
     # 텍스트가 성능이 더 좋다고 판단되어, 그냥 공백으로 이어붙인다.
     return "\n".join(f"{row[0].strip()} {row[1].strip()}" for row in grid)
+
+
+def _render_row_block(grid: list) -> str:
+    """병합 셀이 있는 표를 '[행 N] 헤더1: 값1 헤더2: 값2 ...' 형태로
+    렌더링한다.
+
+    [표현 이원화] Markdown 표는 rowspan/colspan을 표현할 방법이 없어서,
+    병합된 칸을 빈 칸으로 남기면(_render_table의 display_grid 처리) 그
+    행에서 어떤 값이 어떤 헤더에 속하는지가 다시 애매해진다. 병합 셀이
+    있는 표만 이 형태로 바꿔서, 행마다 헤더-값 쌍을 명시적으로 풀어쓴다.
+    한 행을 한 줄로 유지해 다른 행과 섞이지 않게 한다.
+
+    시간복잡도: O(행 수 * 열 수)
+    """
+
+    header = [cell.strip() for cell in grid[0]]
+    lines = []
+
+    for row_idx, row in enumerate(grid[1:], start=1):
+        pairs = [
+            f"{header[c]}: {row[c].strip()}"
+            for c in range(len(header))
+            if row[c].strip()
+        ]
+        if pairs:
+            lines.append(f"[행 {row_idx}] " + " ".join(pairs))
+
+    return "\n".join(lines)
 
 
 def _render_matrix(grid: list) -> str:
@@ -913,7 +963,7 @@ def extract_hwp_document(path: Path) -> ExtractionResult:
             else:
                 raise ValueError(f"알 수 없는 추출 방법: {method}")
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # [버그 수정] HwpParseError(Exception 상속)와 olefile의
             # NotOleFileError(OSError 상속) 모두 RuntimeError가 아니라서
             # 기존 "except RuntimeError"로는 못 잡았다. 그러면 hwp_raw가
@@ -967,7 +1017,7 @@ def _find_best_pdf_tables(page) -> list:
     for settings in _PDF_TABLE_STRATEGIES:
         try:
             tables = page.find_tables(table_settings=settings)
-        except Exception:  # noqa: BLE001, S112
+        except Exception:
             # [버그 수정] pdfplumber/pdfminer가 던지는 파싱 오류도
             # RuntimeError가 아닐 수 있다. 한 전략이 실패해도 다른 전략은
             # 계속 시도해야 하므로 넓게 잡는다.
@@ -1044,7 +1094,7 @@ def extract_pdf_document(path: Path) -> ExtractionResult:
             attempted_errors={},
         )
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # [버그 수정] pdfplumber.open() 등에서 나는 실제 예외(OSError,
         # PDFSyntaxError 등)는 RuntimeError가 아니어서 기존 except로는
         # 못 잡고 그대로 새어나갔다.
@@ -1248,6 +1298,7 @@ PATTERN_TABLE_BLANK_RUN = re.compile(r"\n{3,}")
 PATTERN_TABLE_CELL_SPLIT = re.compile(
     r"(?<!\\)\|"
 )  # 이스케이프 안 된 |만 셀 구분자로 인식
+PATTERN_ROW_BLOCK_LINE = re.compile(r"^\[행 \d+\]\s*")  # _render_row_block 결과 줄
 
 
 def _split_table_row(line: str) -> list[str]:
@@ -1340,19 +1391,21 @@ def strip_table_markup(text: str) -> str:
     속하는지가 텍스트 자체에 남기 때문에 청크가 표 중간에서 잘려도 행
     단위로는 의미가 보존된다.
 
-    이 함수는 `|`로 둘러싸인 표 형태 줄만 건드리므로, `|`를 쓰지 않는
-    계층/불릿 마커(□■○◦※•▶▷), 목차/섹션 제목(Ⅰ.Ⅱ.Ⅲ.), 활동/과업 번호
-    (Activity N.N.N), 법률/계약 조항(제N조, ①②...)은 전혀 영향을 받지
-    않는다. `_render_keyvalue`가 만든 2열 표(이미 "키 값" 형태라 `|`가
-    없음)도 손대지 않는다 - 이미 헤더-값이 한 줄에 묶여 있어 그대로 둬도
-    안전하다.
+    이 함수는 `|`로 둘러싸인 표 형태 줄과 `_render_row_block`이 만든
+    "[행 N] 헤더: 값 ..." 줄만 건드리므로, 그 외(`|`도 `[행 N]` 태그도
+    없는) 계층/불릿 마커(□■○◦※•▶▷), 목차/섹션 제목(Ⅰ.Ⅱ.Ⅲ.), 활동/과업
+    번호(Activity N.N.N), 법률/계약 조항(제N조, ①②...)은 전혀 영향을
+    받지 않는다. `_render_keyvalue`가 만든 2열 표(이미 "키 값" 형태라
+    `|`도 `[행 N]`도 없음)도 손대지 않는다 - 이미 헤더-값이 한 줄에 묶여
+    있어 그대로 둬도 안전하다.
 
     Args:
-        text: clean_text_verbose까지 끝난 정제 텍스트(page_content).
+        text: `_render_table`이 표 형태별로 렌더링을 마친, 생성(LLM)용
+            원본 텍스트(`clean_text_verbose`까지 끝난 상태).
 
     Returns:
         str: 표 마크업을 제거하고, 데이터 행마다 "헤더 값" 쌍을 이어붙인
-        평문.
+        검색/임베딩용 평문.
     """
 
     # 표 진단 태그(실패/부분복원)는 report/warnings에서 이미 집계했으니
@@ -1374,6 +1427,17 @@ def strip_table_markup(text: str) -> str:
             continue
 
         _flush_table_buffer()
+
+        row_block_match = PATTERN_ROW_BLOCK_LINE.match(line)
+        if row_block_match:
+            # "[행 N] 헤더1: 값1 헤더2: 값2" -> "헤더1 값1 헤더2 값2"
+            # 태그와 콜론만 걷어내고, 헤더-값이 같은 줄에 있다는 결합
+            # 정보는 그대로 유지한다.
+            content = line[row_block_match.end() :].replace(":", "")
+            content = re.sub(r"[ \t]{2,}", " ", content).strip()
+            output_lines.append(content)
+            continue
+
         # 표 밖(그 줄에 |가 없는 경우)의 <br>은 원래 의도대로 줄바꿈으로 되돌린다.
         output_lines.append(line.replace("<br>", "\n"))
 
@@ -1393,6 +1457,7 @@ PATTERN_TABLE_MARKUP_LEFTOVERS = {
     "잔존_br": re.compile(r"<br>"),
     "잔존_구분행": re.compile(r"^\s*\|?\s*:?-{2,}", re.MULTILINE),
     "잔존_진단태그": re.compile(r"\[표 (?:복원 실패|부분 복원)"),
+    "잔존_행블록태그": re.compile(r"\[행 \d+\]"),
 }
 
 
@@ -1531,6 +1596,7 @@ def process_document(path: Path) -> dict:
         # hwp_raw가 채택되지 못한 이유 (성공한 문서라도 조용한 폴백을 추적하기 위함)
         "hwp_raw_skipped_reason": extraction.attempted_errors.get("hwp_raw"),
         "clean_text": "",
+        "clean_text_for_generation": "",
         "_warnings": [],
     }
     base.update({k: None for k in FIELD_ALIASES})
@@ -1540,10 +1606,13 @@ def process_document(path: Path) -> dict:
 
     clean, warnings_list = clean_text_verbose(extraction.text)
 
-    # [표 구조 제거] 표 성공/부분/실패 판정과 경고 집계(위 tables_failed/
-    # tables_partial)는 fill_ratio 기준 그대로 유지하고, 실제 코퍼스에
-    # 들어갈 텍스트만 Markdown 격자를 걷어낸 평문으로 바꾼다.
-    clean = strip_table_markup(clean)
+    # [표현 이원화] clean은 _render_table이 표 형태별로(단순 격자는
+    # Markdown, 병합 셀은 row-block, key-value는 그대로) 이미 구조화해
+    # 놓은 상태 - 이걸 그대로 생성(LLM)용으로 쓴다. 검색/임베딩용은 여기서
+    # 마크업만 걷어낸 평문을 별도로 만든다. 표 성공/부분/실패 판정과 경고
+    # 집계(위 tables_failed/tables_partial)는 fill_ratio 기준 그대로 유지.
+    clean_for_generation = clean
+    clean_for_embedding = strip_table_markup(clean)
 
     if extraction.tables_failed > 0:
         warnings_list.append(
@@ -1556,7 +1625,8 @@ def process_document(path: Path) -> dict:
             f"표 {extraction.tables_total}개 중 {extraction.tables_partial}개 부분 복원"
         )
 
-    base["clean_text"] = clean
+    base["clean_text"] = clean_for_embedding
+    base["clean_text_for_generation"] = clean_for_generation
     base["_warnings"] = warnings_list
     base.update(extract_metadata(extraction.text))
 
@@ -1867,7 +1937,7 @@ def run_pipeline(
         try:
             row = process_document(path)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # [버그 수정] 원본 코드는 RuntimeError만 잡았지만, 실제로
             # process_document 내부(특히 olefile)에서 나는 예외는 대부분
             # RuntimeError가 아니다(예: NotOleFileError는 OSError 상속).
@@ -2025,13 +2095,17 @@ def write_jsonl(
     """
 
     metadata_columns = [
-        col for col in df.columns if col not in ("파일명", "clean_text")
+        col
+        for col in df.columns
+        if col not in ("파일명", "clean_text", "clean_text_for_generation")
     ]
 
     with open(path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
             record = {
-                "page_content": row["clean_text"] or "",
+                "page_content": row["clean_text"] or "",  # 검색/임베딩용 (평문)
+                "page_content_for_generation": row.get("clean_text_for_generation")
+                or "",  # 생성/LLM 컨텍스트용 (표 형태별 구조 유지)
                 "metadata": {
                     "source": row["파일명"],
                     **{col: row[col] for col in metadata_columns},
@@ -2049,19 +2123,30 @@ def write_jsonl(
 
     with open(chunk_output_path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
-            chunks = chunk_text(
-                row["clean_text"] or "",
+            # [표현 이원화 + 청킹 정합성] 구조가 살아있는 생성용 텍스트를
+            # 먼저 청크로 자르고, 검색/임베딩용은 "같은 청크"에 strip_table_
+            # markup을 적용해서 파생시킨다. 두 텍스트를 따로따로 청킹하면
+            # 표 마크업 유무로 길이가 달라져 청크 경계가 어긋날 수 있는데,
+            # 이 순서(생성용 청킹 -> 임베딩용은 그 청크에서 파생)를 쓰면
+            # chunk_index가 항상 같은 내용을 가리키는 게 구조적으로 보장된다.
+            generation_source = (
+                row.get("clean_text_for_generation") or row["clean_text"] or ""
+            )
+            generation_chunks = chunk_text(
+                generation_source,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
 
-            for i, chunk in enumerate(chunks):
+            for i, gen_chunk in enumerate(generation_chunks):
+                embedding_chunk = strip_table_markup(gen_chunk)
                 record = {
-                    "page_content": chunk,
+                    "page_content": embedding_chunk,  # 검색/임베딩용
+                    "page_content_for_generation": gen_chunk,  # 생성/LLM 컨텍스트용
                     "metadata": {
                         "source": row["파일명"],
                         "chunk_index": i,
-                        "chunk_total": len(chunks),
+                        "chunk_total": len(generation_chunks),
                         **{col: row[col] for col in metadata_columns},
                     },
                 }
