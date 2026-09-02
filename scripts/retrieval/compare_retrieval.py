@@ -102,7 +102,7 @@ def build_setups(args):
     print(f"  BM25 인덱스 준비 {time.time() - t:.0f}초")
     setups["BM25"] = lambda q: bm25.search(q, args.pool)
 
-    dense = Dense(load_store(plain_index, embedder), k=args.pool)
+    dense = Dense(load_store(plain_index, embedder, chunks), k=args.pool)
     searchers.append(dense)
     setups["Dense"] = lambda q: dense.search(q, args.pool)
 

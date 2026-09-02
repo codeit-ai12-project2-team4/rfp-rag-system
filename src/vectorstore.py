@@ -17,6 +17,7 @@ OpenAI 를 쓰면 돈이 나간다. 그래서 이름을 붙여 저장하고 다�
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -68,13 +69,18 @@ def fingerprint(embedder):
     return type(embedder).__name__
 
 
-def stamp(path, embedder, store):
-    """어떤 모델로 만든 인덱스인지 옆에 적어 둔다.
+def stamp(path, embedder, store, chunks=None):
+    """어떤 모델·어떤 청크로 만든 인덱스인지 옆에 적어 둔다.
+
+    청크 **개수**만으로는 부족하다. 전처리 파이프라인이 바뀌어도 개수가 같을 수
+    있고, 그러면 조용히 옛 인덱스를 쓰게 된다 (8/29 에 그렇게 하루를 버렸다).
+    본문 해시까지 찍어 둔다.
 
     Args:
         path (Path): 인덱스 폴더.
         embedder: 만들 때 쓴 임베딩 객체.
         store: 만들어진 FAISS 인덱스.
+        chunks: 만들 때 쓴 Document 리스트. 주면 본문 지문을 같이 찍는다.
     """
     (path / "meta.json").write_text(
         json.dumps(
@@ -82,6 +88,7 @@ def stamp(path, embedder, store):
                 "model": fingerprint(embedder),
                 "dim": store.index.d,
                 "chunks": store.index.ntotal,
+                "signature": chunk_signature(chunks) if chunks else None,
             },
             ensure_ascii=False,
             indent=2,
@@ -89,7 +96,15 @@ def stamp(path, embedder, store):
     )
 
 
-def verify(path, name, embedder, store):
+def chunk_signature(chunks):
+    """청크 본문의 md5 앞 12자. 같은 내용이면 같은 값이 나온다."""
+    digest = hashlib.md5()
+    for chunk in chunks:
+        digest.update(chunk.page_content.encode())
+    return digest.hexdigest()[:12]
+
+
+def verify(path, name, embedder, store, chunks=None):
     """불러온 인덱스가 지금 임베더로 만든 게 맞는지 본다.
 
     안 맞으면 faiss 가 `assert d == self.d` 로 죽는데, 그건 검색 첫 질문에서야
@@ -102,25 +117,34 @@ def verify(path, name, embedder, store):
         name (str): 인덱스 이름 (오류 메시지에 쓴다).
         embedder: 지금 쓰려는 임베딩 객체.
         store: 불러온 FAISS 인덱스.
+        chunks: 지금 쓰려는 청크. 주면 본문 지문까지 대조한다. **전처리
+            파이프라인이 바뀌면 이것만 잡아낸다** — 이름도 개수도 그대로일 수 있다.
 
     Returns:
         불러온 인덱스 그대로.
 
     Raises:
-        RuntimeError: 만들 때와 다른 모델일 때.
+        RuntimeError: 만들 때와 다른 모델이거나 다른 청크일 때.
     """
     now = fingerprint(embedder)
     meta = path / "meta.json"
     rebuild = f"  python src/vectorstore.py --chunks {name.rsplit('__', 1)[0]} --force"
 
     if meta.exists():
-        was = json.loads(meta.read_text()).get("model")
-        if was != now:
+        was = json.loads(meta.read_text())
+        if was.get("model") != now:
             raise RuntimeError(
                 f"인덱스를 만든 모델과 다릅니다: {name}\n"
-                f"  만들 때  {was}\n"
+                f"  만들 때  {was.get('model')}\n"
                 f"  지금     {now}\n"
                 f"다시 만드세요:\n{rebuild}"
+            )
+        if chunks and was.get("signature") and was["signature"] != chunk_signature(chunks):
+            raise RuntimeError(
+                f"인덱스를 만든 청크와 다릅니다: {name}\n"
+                f"  만들 때  {was['signature']}  ({was.get('chunks')}개)\n"
+                f"  지금     {chunk_signature(chunks)}  ({len(chunks)}개)\n"
+                f"전처리본이 바뀌었습니다. 다시 만드세요:\n{rebuild}"
             )
         return store
 
@@ -162,6 +186,7 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
                 FAISS.load_local(
                     str(path), embedder, allow_dangerous_deserialization=True
                 ),
+                chunks,
             )
 
     if verbose:
@@ -175,19 +200,21 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         if path.exists():
             shutil.rmtree(path)
         store.save_local(str(path))
-        stamp(path, embedder, store)
+        stamp(path, embedder, store, chunks)
         if verbose:
             print(f"인덱스 저장: {path} ({fingerprint(embedder)}, {store.index.d}차원)")
     return store
 
 
-def load_store(name, embedder):
+def load_store(name, embedder, chunks=None):
     """저장해 둔 인덱스를 불러온다.
 
     Args:
         name: `build_store` 에 준 것과 같은 이름.
         embedder: 만들 때와 **같은** 임베딩 객체. 다른 모델을 주면 차원이
             안 맞거나, 맞더라도 엉뚱한 결과가 나온다.
+        chunks: 지금 쓰려는 청크. 주면 인덱스가 이 청크로 만들어진 게 맞는지
+            대조한다. 청크를 이미 읽어 둔 곳(BM25 를 같이 쓰는 곳)은 넘길 것.
 
     Returns:
         FAISS 인덱스.
@@ -208,6 +235,7 @@ def load_store(name, embedder):
         name,
         embedder,
         FAISS.load_local(str(path), embedder, allow_dangerous_deserialization=True),
+        chunks,
     )
 
 
@@ -318,3 +346,37 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _demo():
+    """지문 대조가 실제로 막는지 본다. 임베딩 없이 meta.json 만 다룬다.
+
+        python -c "import sys; sys.path[:0]=['src','.']; import vectorstore; vectorstore._demo()"
+    """
+    import tempfile
+    from types import SimpleNamespace
+
+    from langchain_core.documents import Document
+
+    chunks = [Document(page_content="가나다"), Document(page_content="라마바")]
+    other = [Document(page_content="가나다"), Document(page_content="사아자")]  # 개수는 같다
+    assert chunk_signature(chunks) != chunk_signature(other)
+
+    embedder = SimpleNamespace(model_id="테스트모델")
+    store = SimpleNamespace(index=SimpleNamespace(d=8, ntotal=2))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp)
+        stamp(path, embedder, store, chunks)
+
+        verify(path, "테스트", embedder, store, chunks)          # 같은 청크 — 통과
+        verify(path, "테스트", embedder, store)                  # 청크 없음 — 옛 동작 그대로
+
+        try:
+            verify(path, "테스트", embedder, store, other)
+        except RuntimeError as error:
+            assert "청크와 다릅니다" in str(error), error
+        else:
+            raise AssertionError("개수가 같은 다른 청크를 못 잡았다")
+
+    print("통과 — 개수가 같아도 내용이 다르면 잡는다")

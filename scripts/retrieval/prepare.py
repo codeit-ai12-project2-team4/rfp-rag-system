@@ -95,6 +95,16 @@ def check(build=False):
         was = json.loads(meta.read_text())
         print(f"    O  {was.get('chunks')}청크 · {was.get('dim')}차원")
         print(f"       만든 모델  {was.get('model')}")
+        # 이름도 개수도 같은데 내용만 바뀐 경우는 이것만 잡는다
+        from pieces.search import chunk_signature
+
+        now = chunk_signature(chunking.load_chunks(chunks))
+        if was.get("signature") is None:
+            print("    ? 청크 지문이 없는 옛 인덱스입니다. 다시 만드는 게 안전합니다")
+            stale = True
+        elif was["signature"] != now:
+            print(f"    X 이 청크로 만든 게 아닙니다 (만들 때 {was['signature']} / 지금 {now})")
+            stale = True
     elif (settings.VECTORSTORE / index).exists():
         print("    ? 도장(meta.json)이 없는 옛 인덱스입니다. 다시 만드는 게 안전합니다")
         stale = True
