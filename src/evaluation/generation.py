@@ -11,6 +11,7 @@
 import re
 
 from evaluation.evalset import matches
+from generation import DEFAULT_JUDGE_MAX_TOKENS
 
 
 def cite_rate(answer):
@@ -71,7 +72,9 @@ def judge_faithfulness(llm, question, context, answer):
         "[답변]",
         answer,
     ])
-    verdict = llm.ask(JUDGE_SYSTEM, user, max_tokens=10).strip().upper()
+    verdict = (
+        llm.ask(JUDGE_SYSTEM, user, max_tokens=DEFAULT_JUDGE_MAX_TOKENS).strip().upper()
+    )
     if "YES" in verdict:
         return True
     if "NO" in verdict:

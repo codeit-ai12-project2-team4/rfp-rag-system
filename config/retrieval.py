@@ -25,14 +25,14 @@
 # 좋다고 판단되면 그때 아래 기본값을 고친다.
 import os
 
-DOCS = os.environ.get("DOCS", "cleaned_documents_v4")
+DOCS = os.environ.get("DOCS", "cleaned_documents_v6")
 HOW = os.environ.get("HOW", "recursive")
-SIZE = int(os.environ.get("SIZE", 1500))
-OVERLAP = int(os.environ.get("OVERLAP", 250))
+SIZE = int(os.environ.get("SIZE", "1500"))
+OVERLAP = int(os.environ.get("OVERLAP", "250"))
 EMBED = os.environ.get("EMBED", "tei")
 RERANK = os.environ.get("RERANK", "tei")
-POOL = int(os.environ.get("POOL", 80))  # 리랭커에 넘길 후보 수. 30~120 을 재고 골랐다
-TOP_K = int(os.environ.get("TOP_K", 8))  # 리랭커가 남길 수. 예산에서 다시 잘린다
+POOL = int(os.environ.get("POOL", "80"))  # 리랭커에 넘길 후보 수. 30~120 을 재고 골랐다
+TOP_K = int(os.environ.get("TOP_K", "8"))  # 리랭커가 남길 수. 예산에서 다시 잘린다
 EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 
 
@@ -45,9 +45,7 @@ def chunk_name(docs=None, how=None, size=None, overlap=None):
     Returns:
         str: 예) `cleaned_documents_v4__recursive_1500_250`
     """
-    return (
-        f"{docs or DOCS}__{how or HOW}_{size or SIZE}_{overlap or OVERLAP}"
-    )
+    return f"{docs or DOCS}__{how or HOW}_{size or SIZE}_{overlap or OVERLAP}"
 
 
 def index_name(chunks=None, embed=None):
