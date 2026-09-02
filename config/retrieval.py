@@ -25,7 +25,7 @@
 # 좋다고 판단되면 그때 아래 기본값을 고친다.
 import os
 
-DOCS = os.environ.get("DOCS", "cleaned_documents_v7")
+DOCS = os.environ.get("DOCS", "cleaned_documents_v8")
 HOW = os.environ.get("HOW", "recursive")
 SIZE = int(os.environ.get("SIZE", "1500"))
 OVERLAP = int(os.environ.get("OVERLAP", "250"))
@@ -39,11 +39,14 @@ POOL = int(os.environ.get("POOL", "80"))  # 리랭커에 넘길 후보 수. 30~1
 TOP_K = int(os.environ.get("TOP_K", "8"))  # 리랭커가 남길 수. 예산에서 다시 잘린다
 EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 
+
 # 전처리팀이 청크까지 잘라서 주면 우리 이름 규칙(`__recursive_`)과 안 맞는다.
 # 그럴 때만 이름을 통째로 덮어쓴다. 우리가 자른 게 아니라는 게 이름에 남는다.
 #
 #     CHUNKS=cleaned_documents_v7__1500_250 bash scripts/retrieval/nightly.sh
-CHUNKS = os.environ.get("CHUNKS")
+# 기본값은 DOCS 와 같은 버전으로 맞춰 둔다. 여기가 어긋나면 API 가 옛 코퍼스로
+# 답하는데 아무 오류도 안 난다 — 이 파일 맨 위 목록의 마지막 줄이 그 사고다.
+CHUNKS = os.environ.get("CHUNKS", "cleaned_documents_v8__1500_250")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):
@@ -56,7 +59,10 @@ def chunk_name(docs=None, how=None, size=None, overlap=None):
         str: 예) `cleaned_documents_v4__recursive_1500_250`.
         `CHUNKS` 가 있으면 인자와 무관하게 그 이름을 그대로 쓴다.
     """
-    if CHUNKS:
+    # 인자를 하나라도 주면 계산해서 쓴다. 무조건 CHUNKS 를 돌려주면 설정을
+    # 바꿔 가며 도는 비교 스크립트(compare_chunking·sweep_chunks)가 전부
+    # 같은 이름을 받아 같은 인덱스를 본다.
+    if CHUNKS and docs is None and how is None and size is None and overlap is None:
         return CHUNKS
     return f"{docs or DOCS}__{how or HOW}_{size or SIZE}_{overlap or OVERLAP}"
 
