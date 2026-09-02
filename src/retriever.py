@@ -389,19 +389,24 @@ def search_notices(
     return rows[:top_n]
 
 
-def build_context(chunks, budget=None):
+def build_context(chunks, budget=None, generation=True):
     """청크를 `generate_answer(context=...)` 에 넣을 문자열로 만든다.
 
     `[1] 사업명 · 발주기관` 머리가 붙는다. 이 번호가 곧 인용 번호다.
 
+    **기본이 생성용 본문이다.** 9/8 A/B 에서 표 구조를 살린 쪽이 충실성
+    0.963 대 0.937 로 이겼다 (191문항, 3칸 중 2칸). 대가는 발췌 3.52 → 3.27 개다.
+    청크에 생성용 본문이 없으면 `body()` 가 검색용으로 알아서 떨어진다.
+
     Args:
         chunks: `retrieve()` 가 돌려준 청크.
         budget: 최대 글자 수. 생략하면 `settings.MAX_CONTEXT_CHARS`.
+        generation: False 면 검색용 평문을 넣는다. A/B 를 다시 잴 때만 쓴다.
 
     Returns:
         발췌를 이어 붙인 문자열. 예산을 넘지 않는다.
     """
-    return format_context(fit_context(chunks, budget))
+    return format_context(fit_context(chunks, budget, generation), generation)
 
 
 def sources(chunks):
@@ -624,8 +629,8 @@ def main():
         embed=args.embed,
         rerank=args.rerank,
     )
-    kept = fit_context(chunks)
-    context = format_context(kept)
+    kept = fit_context(chunks, generation=True)
+    context = format_context(kept, generation=True)
 
     print(f"찾은 청크 {len(chunks)}개 · 예산 안에 {len(kept)}개 · {len(context):,}자\n")
     for source, chunk in zip(sources(kept), kept, strict=False):
