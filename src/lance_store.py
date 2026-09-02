@@ -122,10 +122,14 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         {
             "vector": vector,
             "text": chunk.page_content,
-            # 메타데이터는 문서마다 키가 달라서 컬럼으로 펼치면 스키마가 깨진다.
-            # 통째로 JSON 문자열 한 칸에 넣는다.
-            # ponytail: 이러면 doc_id 로 prefilter 를 못 한다. 필요해지면
-            # doc_id 만 별도 컬럼으로 빼고 .where("doc_id IN (...)") 를 쓴다.
+            # doc_id 는 **컬럼으로 뺀다.** 나머지 메타데이터는 문서마다 키가
+            # 달라서 펼치면 스키마가 깨지므로 JSON 한 칸에 통째로 넣는다.
+            #
+            # doc_id 만 컬럼인 이유는 지우기 위해서다. 마감 지난 공고를
+            # 아카이브하면 벡터도 같이 빠져야 하는데, FAISS 는 인덱스를 통째로
+            # 메모리에 올려 다시 써야 하고 LanceDB 는 `delete()` 한 줄이다.
+            # 그게 이 저장소를 재는 진짜 이유가 됐다.
+            "doc_id": str(chunk.metadata.get("doc_id") or ""),
             "meta": json.dumps(chunk.metadata, ensure_ascii=False),
         }
         for chunk, vector in zip(chunks, vectors)
@@ -182,6 +186,70 @@ def load_store(name, embedder):
                 f"  python src/lance_store.py --chunks {name.rsplit('__', 1)[0]} --force"
             )
     return LanceStore(db.open_table(name), embedder, name)
+
+
+def add_chunks(name, chunks, embedder, verbose=True):
+    """이미 있는 테이블에 청크를 **덧붙인다.** 매일 들어오는 새 공고용.
+
+    전체를 다시 임베딩하지 않는다. 하루 32건이면 청크 3천 개인데, 코퍼스가
+    한 달만 쌓여도 전체 재임베딩은 10만 개가 넘는다. 그 차이가 몇 분과
+    몇십 분을 가른다.
+
+    **테이블이 없으면 만들지 않고 에러다.** 조용히 새로 만들면 옛 인덱스가
+    사라진 걸 아무도 모른다 — 첫 인덱스는 `build_store` 로 명시적으로 만든다.
+
+    Args:
+        name: 테이블 이름.
+        chunks: 더할 Document 리스트.
+        embedder: **만들 때와 같은** 임베딩 객체. 도장으로 확인한다.
+        verbose: 진행 상황을 찍을지.
+
+    Returns:
+        (더하기 전 행 수, 더한 뒤 행 수).
+    """
+    store = load_store(name, embedder)  # 여기서 모델 도장을 검사한다
+    if not chunks:
+        return (len(store), len(store))
+    before = len(store)
+    vectors = embedder.embed_documents([c.page_content for c in chunks])
+    store.table.add([
+        {
+            "vector": vector,
+            "text": chunk.page_content,
+            "doc_id": str(chunk.metadata.get("doc_id") or ""),
+            "meta": json.dumps(chunk.metadata, ensure_ascii=False),
+        }
+        for chunk, vector in zip(chunks, vectors)
+    ])
+    after = store.table.count_rows()
+    if verbose:
+        print(f"{name}: {before:,} → {after:,}행 ({after - before:,}개 추가)")
+    return before, after
+
+
+def delete_docs(name, doc_ids, embedder=None):
+    """공고 몇 건의 청크를 테이블에서 지운다. 아카이브할 때 쓴다.
+
+    FAISS 로는 이게 인덱스를 통째로 다시 쓰는 일이라 사실상 못 한다.
+
+    Args:
+        name: 테이블 이름.
+        doc_ids: 지울 doc_id 목록.
+        embedder: 안 줘도 된다. 지우기만 할 거면 모델 확인이 필요 없다.
+
+    Returns:
+        (지우기 전 행 수, 지운 뒤 행 수).
+    """
+    doc_ids = [str(d) for d in doc_ids if str(d)]
+    if not doc_ids:
+        return (0, 0)
+    table = _db().open_table(name)
+    before = table.count_rows()
+    quoted = ", ".join("'" + d.replace("'", "''") + "'" for d in doc_ids)
+    table.delete(f"doc_id IN ({quoted})")
+    after = table.count_rows()
+    print(f"{name}: {before:,} → {after:,}행 ({before - after:,}개 지움)")
+    return before, after
 
 
 def list_stores():
