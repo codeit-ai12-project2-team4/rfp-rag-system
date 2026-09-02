@@ -25,7 +25,7 @@
 # 좋다고 판단되면 그때 아래 기본값을 고친다.
 import os
 
-DOCS = os.environ.get("DOCS", "cleaned_documents_v6")
+DOCS = os.environ.get("DOCS", "cleaned_documents_v7")
 HOW = os.environ.get("HOW", "recursive")
 SIZE = int(os.environ.get("SIZE", "1500"))
 OVERLAP = int(os.environ.get("OVERLAP", "250"))
