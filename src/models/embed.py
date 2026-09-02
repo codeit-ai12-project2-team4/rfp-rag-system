@@ -11,8 +11,6 @@ import os
 import requests
 from langchain_core.embeddings import Embeddings
 
-# 8000·8001·8080·8081 은 JupyterHub 가 쓰므로 피했다.
-# 팀 공용 JupyterHub 가 도는 VM 에서는 이 포트를 절대 쓰면 안 된다.
 TEI_EMBED_URL = os.environ.get("TEI_EMBED_URL", "http://localhost:8085")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "dragonkue/BGE-m3-ko")
 # 요즘 임베딩 모델은 질의와 문서에 **서로 다른 접두어**를 요구한다. 안 붙이면
