@@ -7,6 +7,7 @@
 
     POST /search   자연어로 공고 찾기 (1단계 — 사람이 목록에서 고르는 화면)
     POST /ask      고른 공고 안에서 질문 (2단계 — 발췌 → 답변 → 출처)
+    GET  /file/{doc_id}  그 공고의 원본 RFP 내려받기
     GET  /models   드롭다운에 채울 모델 목록
 
 **시나리오 A/B 는 여기 없다.** 그건 우리 인프라 선택이지 고객의 선택이 아니고,
@@ -20,13 +21,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config import MODEL_CONFIGS
 from generation import generate_answer
-from retriever import build_context, retrieve, search_notices, sources
+from retriever import (
+    build_context,
+    file_for,
+    retrieve,
+    search_notices,
+    sources,
+)
 
 app = FastAPI(title="입찰메이트 RFP")
 app.add_middleware(
@@ -102,3 +110,20 @@ def ask(body: Ask):
         history=body.history,
     )
     return {**result, "sources": sources(chunks)}
+
+
+@app.get("/file/{doc_id}")
+def file(doc_id: str):
+    """공고의 원본 RFP 를 내려준다.
+
+    **나라장터 링크가 아니라 우리가 받아둔 파일을 준다.** 답변의 근거가 된 그
+    문서여야 하기 때문이다. 공고가 변경·재공고되면 나라장터 쪽 파일은 바뀐다.
+
+    경로는 `data_list.csv` 에 적힌 이름으로만 만든다 — `doc_id` 를 그대로
+    경로에 붙이지 않는다.
+    """
+    found = file_for(doc_id)
+    if not found:
+        raise HTTPException(404, f"원본 파일이 없습니다: {doc_id}")
+    path, name = found
+    return FileResponse(path, filename=name, media_type="application/octet-stream")
