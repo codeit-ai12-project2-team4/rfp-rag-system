@@ -389,6 +389,56 @@ def search_notices(
     return rows[:top_n]
 
 
+@lru_cache(maxsize=1)
+def _files():
+    """doc_id → `data/raw` 의 원본 파일. **CSV 가 기준이다.**
+
+    청크 메타에는 파일명이 없고, 있더라도 믿으면 안 된다 — 사용자가 준
+    문자열로 경로를 만들면 상위 폴더로 빠져나갈 수 있다. **CSV 에 적힌 이름만**
+    쓰면 그 문제가 통째로 없어진다.
+
+    파일명 규칙이 두 가지로 섞여 있다. 처음 받은 100건은 `{기관}_{사업명}.hwp`,
+    크롤러가 받은 건 `{doc_id}.hwp`. 그래서 규칙으로 만들지 않고 표를 읽는다.
+    """
+    table = {}
+    if not settings.META_CSV.exists():
+        return table
+    import csv
+
+    with open(settings.META_CSV, encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            number = (row.get("공고 번호") or "").strip().removesuffix(".0")
+            name = (row.get("파일명") or "").strip()
+            if not number or not name:
+                continue
+            try:
+                order = int(float((row.get("공고 차수") or "0").strip() or 0))
+            except ValueError:
+                order = 0
+            table[f"{number}-{order}"] = (name, (row.get("사업명") or "").strip())
+    return table
+
+
+def file_for(doc_id):
+    """공고 하나의 원본 파일. `(경로, 내려줄 이름)` 또는 None.
+
+    내려줄 이름은 사업명으로 만든다 — `20241001798-0.hwp` 를 받으면 뭔지 모른다.
+
+    Returns:
+        (Path, str) 또는 None (표에 없거나 파일이 사라졌을 때).
+    """
+    found = _files().get(str(doc_id))
+    if not found:
+        return None
+    stored, title = found
+    path = (settings.RAW / stored).resolve()
+    # CSV 에 적힌 이름만 쓰므로 원래 못 빠져나가지만, 경계에서 한 번 더 본다.
+    if not path.is_file() or settings.RAW.resolve() not in path.parents:
+        return None
+    safe = "".join(c for c in (title or path.stem) if c not in '/\\:*?"<>|').strip()
+    return path, f"{safe or path.stem}{path.suffix}"
+
+
 def build_context(chunks, budget=None, generation=True):
     """청크를 `generate_answer(context=...)` 에 넣을 문자열로 만든다.
 
