@@ -251,7 +251,16 @@ def _run_sglang(
         model=cfg.model,
         messages=messages,
         max_tokens=max_tokens or cfg.max_new_tokens or DEFAULT_MAX_TOKENS_HF,
+        # 샘플링을 전부 명시한다. **안 적으면 모델의 generation_config 가 이긴다.**
+        # Qwen2.5 는 temperature 0.7 / top_p 0.8 / top_k 20 / repetition_penalty 1.05
+        # 를 들고 있고, SGLang 이 그걸 기본값으로 쓴다("Using default chat sampling
+        # params from model generation config" 로그). temperature 만 0 으로 눌러도
+        # **repetition_penalty 는 그리디 디코딩에서도 로짓을 건드린다.**
+        # RFP 답변은 같은 사업명·금액 단위를 반복해서 써야 하는데 거기에 벌점이 붙는다.
+        # 모델마다 generation_config 가 달라서 비교도 못 하게 된다.
         temperature=0.0,
+        top_p=1.0,
+        extra_body={"top_k": -1, "repetition_penalty": 1.0},
     )
     usage = None
     if response.usage:
