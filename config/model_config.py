@@ -84,19 +84,31 @@ MODEL_CONFIGS = {
         max_new_tokens=512,
         mem="0.45",
     ),
-    "kanana8b": ModelConfig(  # 8B / 약 16GB. 혼자만 올라간다
-        provider="sglang",
-        model="kakaocorp/kanana-1.5-8b-instruct-2505",
-        max_new_tokens=512,
-        mem="0.78",
-    ),
-    "luxia8b": ModelConfig(  # 8B / 약 16GB
-        # 주의: Luxia 는 **베이스 모델**이라 채팅 템플릿이 없다. Llama-3 템플릿을
-        # 씌워서 쓴다. 답변이 이상하면 이 모델부터 의심할 것.
-        provider="sglang",
-        model="saltlux/Ko-Llama3-Luxia-8B",
-        max_new_tokens=512,
-        mem="0.78",
-        args="--chat-template llama-3-instruct",
-    ),
+    # --- 8B 둘은 잠가 뒀다 (2026-09-02) ---------------------------------
+    # 이유는 디스크다. 둘이 합쳐 32GB 인데 SGLang 이미지와 tei-cache 까지
+    # 얹으면 VM 이 버티는지 아직 안 재 봤다. GPU 는 오히려 여유가 있는 편이라
+    # (mem 0.78 = 18.7GB, 가용 19.14GB) 막힌 건 VRAM 이 아니다.
+    # luxia8b 는 그 위에 베이스 모델이라 채팅 템플릿이 없다.
+    #
+    # 되살리는 순서:
+    #   1. df -h / docker system df 로 여유부터 본다 (한 모델에 16GB + 여유)
+    #   2. 주석을 푼다
+    #   3. python scripts/check_gen_store.py --gen kanana8b
+    #   4. Load weight begin 의 avail mem 이 mem*24 보다 큰지 로그로 확인.
+    #      OOM 이면 mem 을 0.74 로 내린다 (여유가 0.4GB 뿐이다)
+    #
+    # "kanana8b": ModelConfig(  # 8B / 약 16GB. 혼자만 올라간다
+    #     provider="sglang",
+    #     model="kakaocorp/kanana-1.5-8b-instruct-2505",
+    #     max_new_tokens=512,
+    #     mem="0.78",
+    # ),
+    # "luxia8b": ModelConfig(  # 8B / 약 16GB
+    #     # 베이스 모델이라 채팅 템플릿이 없다. Llama-3 것을 씌워서 쓴다.
+    #     provider="sglang",
+    #     model="saltlux/Ko-Llama3-Luxia-8B",
+    #     max_new_tokens=512,
+    #     mem="0.78",
+    #     args="--chat-template llama-3-instruct",
+    # ),
 }
