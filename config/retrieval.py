@@ -43,10 +43,15 @@ EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 # 전처리팀이 청크까지 잘라서 주면 우리 이름 규칙(`__recursive_`)과 안 맞는다.
 # 그럴 때만 이름을 통째로 덮어쓴다. 우리가 자른 게 아니라는 게 이름에 남는다.
 #
-#     CHUNKS=cleaned_documents_v7__1500_250 bash scripts/retrieval/nightly.sh
+#     CHUNKS=cleaned_documents_v8__pipeline_1500_250 bash scripts/retrieval/nightly.sh
+#
+# `pipeline` 은 전처리팀 파이프라인이 자른 것이라는 표시다. `recursive` 라고 쓰면
+# 다음 사람이 chunking.py 로 다시 만들 수 있다고 착각하는데, 그러면 표 원자성과
+# 검색용 길이 기준이 사라진다 — 오류는 안 나고 성적만 조용히 달라진다.
+# 이름은 scripts/retrieval/ingest.py 의 target_name() 이 짓는다.
 # 기본값은 DOCS 와 같은 버전으로 맞춰 둔다. 여기가 어긋나면 API 가 옛 코퍼스로
 # 답하는데 아무 오류도 안 난다 — 이 파일 맨 위 목록의 마지막 줄이 그 사고다.
-CHUNKS = os.environ.get("CHUNKS", "cleaned_documents_v8__1500_250")
+CHUNKS = os.environ.get("CHUNKS", "cleaned_documents_v8__pipeline_1500_250")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):
