@@ -59,7 +59,8 @@ def check(build=False):
     ok = True
 
     print("== 지금 설정 ==")
-    for key in ("DOCS", "HOW", "SIZE", "OVERLAP", "EMBED", "RERANK", "POOL", "TOP_K"):
+    for key in ("DOCS", "HOW", "SIZE", "OVERLAP", "EMBED", "RERANK", "STORE",
+                "POOL", "TOP_K"):
         print(f"  {key:<9} {getattr(cfg, key)}")
     print(f"  청크      {chunks}")
     print(f"  인덱스     {index}")
@@ -94,9 +95,15 @@ def check(build=False):
     if not path.exists():
         return False
 
-    # 3. 인덱스. 모델까지 대조한다 — 차원이 같으면 faiss 가 안 죽는다
-    print(f"\n[3] 인덱스  {index}")
-    meta = settings.VECTORSTORE / index / "meta.json"
+    # 3. 인덱스. 모델까지 대조한다 — 차원이 같으면 faiss 가 안 죽는다.
+    #
+    # **STORE 가 가리키는 쪽만 본다.** 절을 하나 더 만들지 않는 이유는,
+    # 둘 다 검사하면 안 쓰는 쪽이 없다고 매번 빨간 줄이 뜨기 때문이다.
+    # 이름(index)은 양쪽이 같고 폴더만 다르다.
+    lance = cfg.STORE == "lance"
+    print(f"\n[3] 인덱스  {index}  ({'lancedb' if lance else 'faiss'})")
+    meta = (settings.LANCEDB / f"{index}.json") if lance else (
+        settings.VECTORSTORE / index / "meta.json")
     stale = False
     if meta.exists():
         was = json.loads(meta.read_text())
@@ -112,15 +119,17 @@ def check(build=False):
         elif was["signature"] != now:
             print(f"    X 이 청크로 만든 게 아닙니다 (만들 때 {was['signature']} / 지금 {now})")
             stale = True
-    elif (settings.VECTORSTORE / index).exists():
-        print("    ? 도장(meta.json)이 없는 옛 인덱스입니다. 다시 만드는 게 안전합니다")
+    elif (settings.LANCEDB / f"{index}.lance" if lance
+          else settings.VECTORSTORE / index).exists():
+        print("    ? 도장이 없는 옛 인덱스입니다. 다시 만드는 게 안전합니다")
         stale = True
     else:
         print("    X 없습니다")
         stale = True
 
     if stale and build:
-        ok = run("src/vectorstore.py", "--chunks", chunks, "--force") and ok
+        maker = "src/lance_store.py" if lance else "src/vectorstore.py"
+        ok = run(maker, "--chunks", chunks, "--force") and ok
     elif stale:
         ok = False
 

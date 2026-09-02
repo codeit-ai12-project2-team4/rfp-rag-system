@@ -34,6 +34,7 @@ for _folder in (_ROOT / "src", _ROOT):
 import lancedb
 from langchain_core.documents import Document
 
+from config import retrieval as cfg
 from config import settings
 
 
@@ -135,9 +136,19 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         for chunk, vector in zip(chunks, vectors)
     ]
     table = db.create_table(name, data=rows, mode="overwrite")
+    # **지문까지 찍는다.** 이름도 개수도 같은데 내용만 바뀌는 일이 잦다 —
+    # 목차 제거는 줄을 지우므로 청크 개수가 안 변한다(실제로 9,189개 그대로였다).
+    # FAISS 인덱스가 이걸로 잡으니 여기도 같아야 prepare.py 가 둘을 같게 본다.
+    from pieces.search import chunk_signature
+
     _stamp(name).write_text(
         json.dumps(
-            {"model": _fingerprint(embedder), "dim": len(rows[0]["vector"]), "chunks": len(rows)},
+            {
+                "model": _fingerprint(embedder),
+                "dim": len(rows[0]["vector"]),
+                "chunks": len(rows),
+                "signature": chunk_signature(chunks) if chunks else None,
+            },
             ensure_ascii=False,
             indent=2,
         ),
@@ -268,7 +279,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="청크를 임베딩해 outputs/lancedb 에 저장한다."
     )
-    parser.add_argument("--chunks", required=True, help="outputs/chunks 의 청크 이름")
+    # 생략하면 config/retrieval.py 가 쓰는 것과 **같은** 이름을 쓴다.
+    # 손으로 적다 틀리면 API 가 "테이블이 없습니다" 로 죽는다 (실제로 겪었다).
+    parser.add_argument("--chunks", default=cfg.chunk_name(),
+                        help="outputs/chunks 의 청크 이름 (생략하면 config 기본값)")
     parser.add_argument("--embed", default="tei", choices=["tei", "local", "openai", "fake"])
     parser.add_argument("--name", help="테이블 이름 (생략하면 청크이름__임베딩)")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 만든다")
@@ -282,6 +296,8 @@ def main():
     store = build_store(chunks, load_embedder(args.embed), name=name, force=args.force)
 
     print(f"\n테이블 이름: {name}  ({len(store):,}행)")
+    if name != cfg.index_name():
+        print(f"주의: config 가 찾는 이름은 {cfg.index_name()} 입니다. API 가 이걸 못 찾습니다.")
     print(f"검색에 쓰려면:  STORE=lance uvicorn src.api:app --port 8010")
 
 
