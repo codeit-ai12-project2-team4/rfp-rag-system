@@ -1,0 +1,41 @@
+# FastAPI 를 부팅·재부팅·크래시 후에 알아서 살리는 유닛.
+#
+#   sudo cp docker/bidmate-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bidmate-api
+#   systemctl status bidmate-api
+#   journalctl -u bidmate-api -f          # 로그
+#
+# **가상환경을 activate 하지 않는다.** activate 는 PATH 를 손보는 게 전부라
+# 유닛에서는 할 일이 없다. .venv/bin/uvicorn 을 절대경로로 부르면 그 안의
+# 파이썬과 패키지를 그대로 쓴다. uv 로 만들었든 pip 로 만들었든 상관없다.
+
+[Unit]
+Description=bidmate RFP API (FastAPI :8010)
+# 모델 교체가 docker compose 를 부르므로 도커가 먼저 떠 있어야 한다.
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+User=spai1203
+WorkingDirectory=/home/spai1203/rfp-rag-system
+ExecStart=/home/spai1203/rfp-rag-system/.venv/bin/uvicorn src.api:app --host 0.0.0.0 --port 8010
+# --reload 는 넣지 않는다. 파일이 바뀔 때마다 워커를 새로 띄우는데, 그때마다
+# FAISS·청크·BM25 를 다시 올려서 수 GB 를 먹고 첫 질문이 6초 느려진다.
+# 워커도 하나뿐이다 — 늘리면 그 색인이 워커 수만큼 복제된다(16GB VM 이다).
+
+Restart=always
+RestartSec=10
+# 기동에 BM25 색인 짓느라 시간이 걸린다. 그 사이 죽은 걸로 안 보게.
+TimeoutStartSec=180
+
+# OOM 으로 죽어도 다시 올린다. 다만 **반복해서 죽으면 원인이 메모리다** —
+# TEI·SGLang 은 GPU 를 쓰지만 이 프로세스는 호스트 RAM 을 쓰고 VM 은 16GB 다.
+# journalctl 에 oom-kill 이 보이면 POOL 이나 청크 수를 줄이는 게 먼저다.
+StartLimitIntervalSec=0
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

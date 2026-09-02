@@ -142,6 +142,40 @@ config 에 `head_dim: 128` 을 명시해서 `hidden_size / num_heads` 와 일부
 python scripts/check_gen_store.py --gen qwen exaone
 ```
 
+## API 를 재부팅에도 살려두기
+
+`docker/bidmate-api.service` 를 그대로 쓴다.
+
+```bash
+sudo cp docker/bidmate-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bidmate-api
+journalctl -u bidmate-api -f
+```
+
+**가상환경은 activate 하지 않는다.** activate 는 PATH 를 손보는 게 전부라
+유닛에서 할 일이 없다. `.venv/bin/uvicorn` 을 절대경로로 부르면 그 안의
+파이썬과 패키지를 그대로 쓴다 — uv 로 만들었든 pip 로 만들었든 같다.
+
+도커 컨테이너는 `restart: unless-stopped` 라 알아서 돌아온다. 이 유닛은
+`After=docker.service` 라서 API 가 도커보다 늦게 뜬다 — 모델 교체가
+`docker compose` 를 부르기 때문이다.
+
+**uvicorn 을 돌리는 계정이 `docker` 그룹에 있어야 한다.**
+
+```bash
+groups | grep docker || sudo usermod -aG docker $USER   # 후 재로그인
+```
+
+없으면 UI 에서 모델을 바꿀 때 permission denied 로 죽는다.
+
+### OOM 이 반복되면
+
+`Restart=always` 라 다시 올라오지만, 계속 죽으면 원인은 호스트 RAM 이다.
+TEI·SGLang 은 GPU 를 쓰지만 uvicorn 프로세스는 FAISS·청크·BM25 를 **호스트
+메모리**에 올리고 이 VM 은 16GB 다. `journalctl -u bidmate-api | grep -i oom`
+에 뭔가 보이면 워커를 늘리지 말고 `POOL` 이나 청크 수부터 줄인다.
+
 ## 노트북에서 쓰기
 
 ```python

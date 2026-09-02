@@ -46,29 +46,29 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
   
-  sparse:
-    image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
-    container_name: bidmate-sparse
-    ports:
-      - "8084:80"                    # Sparse 서비스용 8084 포트 개방
-    volumes:
-      - ./tei-cache:/data
-    environment:
-      - HF_HOME=/data
-    command:
-      - --model-id=telepix/PIXIE-Splade-v1.5
-      - --pooling=splade             # ⚠️ SPLADE 모델 연산을 위해 필수 지정
-      - --max-client-batch-size=64
-      - --max-batch-tokens=16384
-      - --auto-truncate
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
+  # sparse:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
+  #   container_name: bidmate-sparse
+  #   ports:
+  #     - "8084:80"                    # Sparse 서비스용 8084 포트 개방
+  #   volumes:
+  #     - ./tei-cache:/data
+  #   environment:
+  #     - HF_HOME=/data
+  #   command:
+  #     - --model-id=telepix/PIXIE-Splade-v1.5
+  #     - --pooling=splade             # ⚠️ SPLADE 모델 연산을 위해 필수 지정
+  #     - --max-client-batch-size=64
+  #     - --max-batch-tokens=16384
+  #     - --auto-truncate
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   restart: unless-stopped
 
   rerank:
     image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
