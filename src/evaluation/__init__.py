@@ -30,9 +30,10 @@ from evaluation.generation import (
     said_no_info,
 )
 from evaluation.retrieval import (
+    body,
     compare,
-    fit_budget,
     doc_hit_rate,
+    fit_budget,
     hit_rate,
     mrr,
     score_all,
@@ -41,11 +42,12 @@ from evaluation.retrieval import (
 __all__ = [
     "FIELD_PATTERNS",
     "JUDGE_SYSTEM",
+    "body",
     "cite_rate",
     "compare",
     "doc_hit_rate",
-    "fit_budget",
     "evaluate_answers",
+    "fit_budget",
     "hit_rate",
     "judge_faithfulness",
     "load_evalset",

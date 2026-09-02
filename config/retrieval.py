@@ -30,10 +30,20 @@ HOW = os.environ.get("HOW", "recursive")
 SIZE = int(os.environ.get("SIZE", "1500"))
 OVERLAP = int(os.environ.get("OVERLAP", "250"))
 EMBED = os.environ.get("EMBED", "tei")
+# 벡터 저장소. faiss 가 기본이고 lance 는 나란히 두고 재 보는 중이다.
+# 이름 규칙이 같아서 인덱스 이름은 그대로 쓴다 — 폴더만 다르다
+# (outputs/vectorstore vs outputs/lancedb).
+STORE = os.environ.get("STORE", "faiss")
 RERANK = os.environ.get("RERANK", "tei")
 POOL = int(os.environ.get("POOL", "80"))  # 리랭커에 넘길 후보 수. 30~120 을 재고 골랐다
 TOP_K = int(os.environ.get("TOP_K", "8"))  # 리랭커가 남길 수. 예산에서 다시 잘린다
 EVALSET = os.environ.get("EVALSET", "eval_qa_both")
+
+# 전처리팀이 청크까지 잘라서 주면 우리 이름 규칙(`__recursive_`)과 안 맞는다.
+# 그럴 때만 이름을 통째로 덮어쓴다. 우리가 자른 게 아니라는 게 이름에 남는다.
+#
+#     CHUNKS=cleaned_documents_v7__1500_250 bash scripts/retrieval/nightly.sh
+CHUNKS = os.environ.get("CHUNKS")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):
@@ -43,8 +53,11 @@ def chunk_name(docs=None, how=None, size=None, overlap=None):
         docs, how, size, overlap: 생략하면 위 기본값.
 
     Returns:
-        str: 예) `cleaned_documents_v4__recursive_1500_250`
+        str: 예) `cleaned_documents_v4__recursive_1500_250`.
+        `CHUNKS` 가 있으면 인자와 무관하게 그 이름을 그대로 쓴다.
     """
+    if CHUNKS:
+        return CHUNKS
     return f"{docs or DOCS}__{how or HOW}_{size or SIZE}_{overlap or OVERLAP}"
 
 

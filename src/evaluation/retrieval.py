@@ -81,7 +81,22 @@ def doc_hit_rate(pairs, search, k=5):
     return hits / len(pairs) if pairs else 0.0
 
 
-def fit_budget(chunks, budget):
+def body(chunk, generation=False):
+    """청크에서 쓸 본문을 고른다. 생성용이 없으면 검색용으로 떨어진다.
+
+    Args:
+        chunk: Document.
+        generation: True 면 생성용 본문을 고른다.
+
+    Returns:
+        str: 본문.
+    """
+    if generation:
+        return chunk.metadata.get("gen") or chunk.page_content
+    return chunk.page_content
+
+
+def fit_budget(chunks, budget, generation=False):
     """컨텍스트 예산 안에 들어가는 청크만 앞에서부터 남긴다.
 
     **청크가 크면 적중률@5 는 그냥 올라간다.** 극단적으로 문서 하나를 청크
@@ -92,13 +107,16 @@ def fit_budget(chunks, budget):
     Args:
         chunks: 검색 결과 Document 리스트 (점수 순).
         budget: 넣을 수 있는 최대 글자 수.
+        generation: True 면 생성용 본문(`metadata["gen"]`) 길이로 잰다.
+            프롬프트에 실제로 들어가는 건 그쪽이라, 검색용으로 재면 표
+            마크업만큼 예산을 조용히 넘긴다.
 
     Returns:
         예산 안에 들어가는 앞쪽 청크들. 첫 청크가 예산보다 커도 하나는 넣는다.
     """
     kept, used = [], 0
     for chunk in chunks:
-        size = len(chunk.page_content)
+        size = len(body(chunk, generation))
         if kept and used + size > budget:
             break
         kept.append(chunk)

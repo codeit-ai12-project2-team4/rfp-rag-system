@@ -85,7 +85,7 @@ for _folder in (_ROOT / "src", _ROOT):
 import chunking
 from config import retrieval as cfg
 from config import settings
-from evaluation import fit_budget
+from evaluation import body, fit_budget
 from models import load_embedder, load_reranker
 from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
@@ -101,7 +101,15 @@ TOP_K = cfg.TOP_K
 
 @lru_cache(maxsize=2)
 def _store(index, embed):
-    """FAISS 인덱스만 연다. 공고 찾기(1단계)는 이것만 있으면 된다."""
+    """벡터 저장소만 연다. 공고 찾기(1단계)는 이것만 있으면 된다.
+
+    `STORE=lance` 면 LanceDB 를 연다. 둘 다 `similarity_search(query, k)` 하나만
+    있으면 되므로 `Dense` 부품은 어느 쪽인지 모른다.
+    """
+    if cfg.STORE == "lance":
+        import lance_store
+
+        return lance_store.load_store(index, load_embedder(embed))
     return load_store(index, load_embedder(embed))
 
 
@@ -173,7 +181,7 @@ def retrieve(
     return pipeline(query).chunks
 
 
-def format_context(chunks):
+def format_context(chunks, generation=False):
     """청크를 번호 붙여 프롬프트용 문자열로 잇는다.
 
     이 `[1] [2]` 번호가 그대로 인용 번호가 된다. `sources()` 가 돌려주는
@@ -181,6 +189,9 @@ def format_context(chunks):
 
     Args:
         chunks: `retrieve()` 가 돌려준 청크.
+        generation: True 면 표 마크업이 살아 있는 생성용 본문을 쓴다.
+            검색은 마크업 없는 쪽으로 하고 프롬프트에는 있는 쪽을 넣는
+            A/B 를 이 인자 하나로 켠다.
 
     Returns:
         `[1] 사업명 · 발주기관 · 절제목` 머리를 붙이고 `---` 로 이은 문자열.
@@ -193,11 +204,11 @@ def format_context(chunks):
         head = f"[{i}] {title} · {agency}"
         if section:
             head += f" · {section}"
-        blocks.append(head + "\n" + chunk.page_content)
+        blocks.append(head + "\n" + body(chunk, generation))
     return "\n\n---\n\n".join(blocks)
 
 
-def fit_context(chunks, budget=None):
+def fit_context(chunks, budget=None, generation=False):
     """예산 안에 들어가는 청크만 남긴다.
 
     `fit_budget` 은 본문 글자만 센다. 그런데 `format_context` 가 `[1] 사업명 ·
@@ -209,14 +220,16 @@ def fit_context(chunks, budget=None):
     Args:
         chunks: `retrieve()` 가 돌려준 청크.
         budget: 최대 글자 수. 생략하면 `settings.MAX_CONTEXT_CHARS`.
+        generation: True 면 생성용 본문 길이로 잰다. 프롬프트에 들어가는
+            것이 그쪽이므로 여기서 재야 예산이 맞는다.
 
     Returns:
         머리와 구분선까지 세어도 예산 안에 들어가는 청크 리스트.
         하나도 안 들어가면 첫 청크는 남긴다.
     """
     budget = budget or settings.MAX_CONTEXT_CHARS
-    kept = fit_budget(chunks, budget)
-    while len(kept) > 1 and len(format_context(kept)) > budget:
+    kept = fit_budget(chunks, budget, generation)
+    while len(kept) > 1 and len(format_context(kept, generation)) > budget:
         kept = kept[:-1]
     return kept
 
@@ -458,7 +471,7 @@ def preview(text, query, width=220):
     return flat[:width]
 
 
-def export_contexts(evalset, out_path, **kwargs):
+def export_contexts(evalset, out_path, generation=False, **kwargs):
     """평가 질문마다 발췌를 뽑아 파일로 저장한다.
 
     **generation 파트가 검색을 안 돌려도 되게 하려는 것이다.** 브랜치를 가져갈
@@ -486,8 +499,10 @@ def export_contexts(evalset, out_path, **kwargs):
     with open(out_path, "w", encoding="utf-8") as f:
         for i, pair in enumerate(pairs, 1):
             doc_ids = [pair["doc_id"]] if pair.get("doc_id") else None
-            chunks = fit_context(retrieve(pair["question"], doc_ids=doc_ids, **kwargs))
-            context = format_context(chunks)
+            chunks = fit_context(
+                retrieve(pair["question"], doc_ids=doc_ids, **kwargs), generation=generation
+            )
+            context = format_context(chunks, generation)
             f.write(
                 json.dumps(
                     {
@@ -547,6 +562,11 @@ def main():
     parser.add_argument("--index", default=INDEX)
     parser.add_argument("--chunks", default=CHUNKS, help="BM25 가 쓸 청크 이름")
     parser.add_argument(
+        "--generation",
+        action="store_true",
+        help="발췌 본문을 생성용(표 마크업 유지)으로 뽑는다. 검색은 그대로다",
+    )
+    parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
     )
     parser.add_argument(
@@ -559,6 +579,7 @@ def main():
         export_contexts(
             args.evalset,
             out,
+            generation=args.generation,
             top_k=args.top_k,
             index=args.index,
             chunks=args.chunks,

@@ -496,10 +496,40 @@ def load_chunks(name):
     """
     path = settings.CHUNKS / f"chunks_{name}.jsonl"
     with open(path, encoding="utf-8") as f:
-        return [
-            Document(page_content=row["text"], metadata=row["meta"])
-            for row in (json.loads(line) for line in f if line.strip())
-        ]
+        return [_row_to_document(row) for row in (json.loads(line) for line in f if line.strip())]
+
+
+def _row_to_document(row):
+    """jsonl 한 줄을 Document 로 만든다. 두 가지 스키마를 다 받는다.
+
+    `save_chunks` 는 `{"text", "meta"}` 로 쓰는데, 전처리팀이 주는 청크
+    파일은 LangChain 형식(`{"page_content", "metadata"}`)이고 생성용 본문이
+    `page_content_for_generation` 으로 하나 더 붙어 있다. 그 본문은
+    `metadata["gen"]` 에 실어 나른다 — `format_context(generation=True)` 가
+    거기서 꺼내 쓴다.
+
+    Args:
+        row (dict): jsonl 한 줄을 파싱한 것.
+
+    Returns:
+        Document. 생성용 본문이 없으면 `metadata["gen"]` 도 없다.
+    """
+    if "text" in row:
+        return Document(page_content=row["text"], metadata=row["meta"])
+
+    # 문서 단위에서 쓰는 것과 **같은** 변환기를 쓴다. doc_id·title·agency 가
+    # 여기서 만들어지는데, 이걸 건너뛰면 --scoped 도 1단계 평가도 조용히 깨진다.
+    from preprocessing.run import from_langchain, tidy_doc_id
+
+    record = from_langchain(row)
+    meta = record["meta"]
+    meta["doc_id"] = tidy_doc_id(meta["doc_id"])
+    order = row["metadata"].get("chunk_index", 0)
+    meta["chunk_id"] = f"{meta['doc_id']}::{order:04d}"
+    meta["order"] = order
+    if row.get("page_content_for_generation"):
+        meta["gen"] = row["page_content_for_generation"]
+    return Document(page_content=record["text"], metadata=meta)
 
 
 def chunk_stats(chunks):
