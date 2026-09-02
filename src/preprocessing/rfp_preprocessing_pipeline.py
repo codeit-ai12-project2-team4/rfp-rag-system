@@ -744,7 +744,7 @@ def _render_table(frame: dict) -> tuple[str, str]:
             for r in range(row0, min(row0 + cell["rowspan"], rows)):
                 for c in range(col0, min(col0 + cell["colspan"], cols)):
                     grid[r][c] = cell["text"]
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # [버그 수정] 원본 코드는 RuntimeError만 잡았는데, 여기서 실제로
         # 날 수 있는 오류(IndexError 등)는 RuntimeError가 아니라서 사실상
         # 한 번도 안 잡혔다. 사용자가 실제 100건 실행에서 동일 패턴의
@@ -963,7 +963,7 @@ def extract_hwp_document(path: Path) -> ExtractionResult:
             else:
                 raise ValueError(f"알 수 없는 추출 방법: {method}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # [버그 수정] HwpParseError(Exception 상속)와 olefile의
             # NotOleFileError(OSError 상속) 모두 RuntimeError가 아니라서
             # 기존 "except RuntimeError"로는 못 잡았다. 그러면 hwp_raw가
@@ -1017,7 +1017,7 @@ def _find_best_pdf_tables(page) -> list:
     for settings in _PDF_TABLE_STRATEGIES:
         try:
             tables = page.find_tables(table_settings=settings)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
             # [버그 수정] pdfplumber/pdfminer가 던지는 파싱 오류도
             # RuntimeError가 아닐 수 있다. 한 전략이 실패해도 다른 전략은
             # 계속 시도해야 하므로 넓게 잡는다.
@@ -1094,7 +1094,7 @@ def extract_pdf_document(path: Path) -> ExtractionResult:
             attempted_errors={},
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # [버그 수정] pdfplumber.open() 등에서 나는 실제 예외(OSError,
         # PDFSyntaxError 등)는 RuntimeError가 아니어서 기존 except로는
         # 못 잡고 그대로 새어나갔다.
@@ -1937,7 +1937,7 @@ def run_pipeline(
         try:
             row = process_document(path)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # [버그 수정] 원본 코드는 RuntimeError만 잡았지만, 실제로
             # process_document 내부(특히 olefile)에서 나는 예외는 대부분
             # RuntimeError가 아니다(예: NotOleFileError는 OSError 상속).
