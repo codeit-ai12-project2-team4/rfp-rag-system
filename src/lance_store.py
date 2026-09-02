@@ -43,6 +43,30 @@ def _db():
     return lancedb.connect(str(settings.LANCEDB))
 
 
+def _names(db):
+    """테이블 이름 목록. **버전·메서드마다 반환 모양이 다르다.**
+
+    `list_tables()` 는 `context` / `page_token` / `tables` 를 가진 **페이지 응답
+    객체**를 주고, 옛 `table_names()` 는 `list[str]` 을 준다. 페이지 객체를
+    그대로 `in` 으로 비교하면 **방금 만든 테이블도 없다고 나온다** —
+    8,920행을 다 임베딩해 놓고 API 가 그렇게 죽었다.
+
+    `table_names()` 가 deprecated 라 `list_tables()` 를 먼저 쓴다. 옛 버전에는
+    `list_tables()` 가 없어서 그때만 되돌아간다.
+
+    Args:
+        db: `lancedb.connect()` 결과.
+
+    Returns:
+        list[str]: 테이블 이름.
+    """
+    got = db.list_tables() if hasattr(db, "list_tables") else db.table_names()
+    if isinstance(got, dict):
+        return list(got.get("tables") or [])
+    tables = getattr(got, "tables", None)
+    return list(got if tables is None else tables)
+
+
 def _stamp(name):
     """어떤 모델로 만든 테이블인지 적어 두는 파일 경로."""
     return settings.LANCEDB / f"{name}.json"
@@ -108,7 +132,7 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
     """
     db = _db()
     name = name or "tmp"
-    if name in db.list_tables() and not force:
+    if name in _names(db) and not force:
         if verbose:
             print(f"저장된 테이블을 불러옵니다: {settings.LANCEDB / (name + '.lance')}")
         return load_store(name, embedder)
@@ -179,10 +203,10 @@ def load_store(name, embedder):
         RuntimeError: 만들 때와 다른 모델일 때.
     """
     db = _db()
-    if name not in db.list_tables():
+    if name not in _names(db):
         raise FileNotFoundError(
             f"테이블이 없습니다: {name}\n"
-            f"저장된 테이블: {sorted(db.list_tables()) or '(없음)'}\n"
+            f"저장된 테이블: {sorted(_names(db)) or '(없음)'}\n"
             f"먼저 만드세요:  python src/lance_store.py --chunks <청크이름>"
         )
     now = _fingerprint(embedder)
@@ -266,7 +290,7 @@ def delete_docs(name, doc_ids, embedder=None):
 
 def list_stores():
     """만들어 둔 테이블 목록."""
-    return sorted(_db().list_tables()) if settings.LANCEDB.exists() else []
+    return sorted(_names(_db())) if settings.LANCEDB.exists() else []
 
 
 def drop_store(name):
