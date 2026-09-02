@@ -11,8 +11,9 @@ from pathlib import Path
 import sys
 import time
 
-# 프로젝트 루트 (config를 찾기 위함)
+# 프로젝트 루트 (config를 찾기 위함) 와 src (models 를 찾기 위함)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import MAX_CONTEXT_CHARS, MODEL_CONFIGS, OPENAI_API_KEY, ModelConfig
 
@@ -216,8 +217,56 @@ def _run_huggingface(
     return answer, None
 
 
+SGLANG_URL = os.environ.get("SGLANG_URL", "http://localhost:8087")
+
+
+def _run_sglang(
+    cfg: ModelConfig, messages: list[dict], max_tokens: int | None = None
+) -> tuple[str, dict | None]:
+    """VM 의 SGLang 서버로 호출한다 (시나리오 A).
+
+    SGLang 은 OpenAI 규격과 호환이라 base_url 만 바꾸면 _run_openai 와 같은
+    코드다. 다른 점은 **부르기 전에 그 모델이 올라와 있는지 확인**하는 것뿐이다.
+    L4 한 장에 여러 모델을 못 띄워서, 다른 모델이 올라와 있으면 갈아끼운다.
+    처음 받는 8B 면 몇 분 걸린다 — 그동안 이 호출은 그냥 기다린다.
+
+    Args:
+        cfg: 사용할 모델의 ModelConfig. mem/args 필드가 서버 인자로 들어간다.
+        messages: _build_messages()로 만든 메시지 배열.
+        max_tokens: 생성할 최대 토큰 수. 생략하면 cfg.max_new_tokens.
+
+    Returns:
+        (answer, usage) 튜플.
+
+    Raises:
+        RuntimeError: 모델 교체가 제한 시간 안에 안 끝날 때.
+    """
+    from openai import OpenAI
+
+    from models import sglang
+
+    sglang.ensure(cfg.model, mem=cfg.mem or "0.45", args=cfg.args)
+    client = OpenAI(base_url=f"{SGLANG_URL}/v1", api_key="local")
+    response = client.chat.completions.create(
+        model=cfg.model,
+        messages=messages,
+        max_tokens=max_tokens or cfg.max_new_tokens or DEFAULT_MAX_TOKENS_HF,
+        temperature=0.0,
+    )
+    usage = None
+    if response.usage:
+        usage = {
+            "input_tokens": response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+        }
+    return (response.choices[0].message.content or "").strip(), usage
+
+
 _PROVIDER_RUNNERS = {
     "openai": _run_openai,
+    "sglang": _run_sglang,
+    # 지금 MODEL_CONFIGS 에는 huggingface 항목이 없다. 평가 스크립트에서
+    # 프로세스 안에 직접 올려 재고 싶을 때를 위해 남겨 둔다.
     "huggingface": _run_huggingface,
 }
 
