@@ -65,8 +65,24 @@ def warm():
 
 @app.get("/models")
 def models():
-    """드롭다운에 채울 모델 목록."""
-    return [{"key": key, "name": cfg.model} for key, cfg in MODEL_CONFIGS.items()]
+    """드롭다운에 채울 모델 목록.
+
+    `ready` 가 False 면 **고르는 순간 첫 답변이 1~2분 걸린다.** GPU 한 장에
+    생성 모델을 하나만 올릴 수 있어서, 다른 모델을 고르면 컨테이너를
+    갈아끼우기 때문이다. 화면에서 이 사실을 알려주라고 붙인 필드다.
+    """
+    from models.sglang import current
+
+    loaded = current()
+    return [
+        {
+            "key": key,
+            "name": cfg.model,
+            "provider": cfg.provider,
+            "ready": cfg.provider != "sglang" or cfg.model == loaded,
+        }
+        for key, cfg in MODEL_CONFIGS.items()
+    ]
 
 
 @app.post("/search")

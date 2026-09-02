@@ -61,6 +61,7 @@ EVAL_QA = DATA / "eval_qa.json"  # 평가용 정답 데이터셋
 # ── 산출물 ──────────────────────────────────────────────────────────────
 OUTPUTS = ROOT / "outputs"
 VECTORSTORE = OUTPUTS / "vectorstore"  # FAISS 인덱스
+LANCEDB = OUTPUTS / "lancedb"  # LanceDB 테이블 (FAISS 와 A/B 비교용)
 CHUNKS = OUTPUTS / "chunks"  # 청크 jsonl
 REPORTS = OUTPUTS / "reports"  # 전처리 경고/이슈 로그
 EVAL_RESULTS = OUTPUTS / "eval_results"  # 평가 지표 결과
@@ -118,5 +119,5 @@ class Provider(StrEnum):
 
 
 def make_dirs():
-    for folder in (METADATA, PROCESSED, VECTORSTORE, CHUNKS, REPORTS, EVAL_RESULTS):
+    for folder in (METADATA, PROCESSED, VECTORSTORE, LANCEDB, CHUNKS, REPORTS, EVAL_RESULTS):
         folder.mkdir(parents=True, exist_ok=True)
