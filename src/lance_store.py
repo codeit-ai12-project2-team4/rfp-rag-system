@@ -21,7 +21,6 @@ FAISS 의 IndexFlat 과 같은 조건이라 A/B 가 공정하다. PQ 는 압축�
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -109,7 +108,7 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
     """
     db = _db()
     name = name or "tmp"
-    if name in db.table_names() and not force:
+    if name in db.list_tables() and not force:
         if verbose:
             print(f"저장된 테이블을 불러옵니다: {settings.LANCEDB / (name + '.lance')}")
         return load_store(name, embedder)
@@ -155,7 +154,9 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
         encoding="utf-8",
     )
     if verbose:
-        print(f"테이블 저장: {name} ({_fingerprint(embedder)}, {len(rows[0]['vector'])}차원)")
+        print(
+            f"테이블 저장: {name} ({_fingerprint(embedder)}, {len(rows[0]['vector'])}차원)"
+        )
     return LanceStore(table, embedder, name)
 
 
@@ -178,10 +179,10 @@ def load_store(name, embedder):
         RuntimeError: 만들 때와 다른 모델일 때.
     """
     db = _db()
-    if name not in db.table_names():
+    if name not in db.list_tables():
         raise FileNotFoundError(
             f"테이블이 없습니다: {name}\n"
-            f"저장된 테이블: {sorted(db.table_names()) or '(없음)'}\n"
+            f"저장된 테이블: {sorted(db.list_tables()) or '(없음)'}\n"
             f"먼저 만드세요:  python src/lance_store.py --chunks <청크이름>"
         )
     now = _fingerprint(embedder)
@@ -265,7 +266,7 @@ def delete_docs(name, doc_ids, embedder=None):
 
 def list_stores():
     """만들어 둔 테이블 목록."""
-    return sorted(_db().table_names()) if settings.LANCEDB.exists() else []
+    return sorted(_db().list_tables()) if settings.LANCEDB.exists() else []
 
 
 def drop_store(name):
@@ -281,9 +282,14 @@ def main():
     )
     # 생략하면 config/retrieval.py 가 쓰는 것과 **같은** 이름을 쓴다.
     # 손으로 적다 틀리면 API 가 "테이블이 없습니다" 로 죽는다 (실제로 겪었다).
-    parser.add_argument("--chunks", default=cfg.chunk_name(),
-                        help="outputs/chunks 의 청크 이름 (생략하면 config 기본값)")
-    parser.add_argument("--embed", default="tei", choices=["tei", "local", "openai", "fake"])
+    parser.add_argument(
+        "--chunks",
+        default=cfg.chunk_name(),
+        help="outputs/chunks 의 청크 이름 (생략하면 config 기본값)",
+    )
+    parser.add_argument(
+        "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
+    )
     parser.add_argument("--name", help="테이블 이름 (생략하면 청크이름__임베딩)")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 만든다")
     args = parser.parse_args()
@@ -297,8 +303,10 @@ def main():
 
     print(f"\n테이블 이름: {name}  ({len(store):,}행)")
     if name != cfg.index_name():
-        print(f"주의: config 가 찾는 이름은 {cfg.index_name()} 입니다. API 가 이걸 못 찾습니다.")
-    print(f"검색에 쓰려면:  STORE=lance uvicorn src.api:app --port 8010")
+        print(
+            f"주의: config 가 찾는 이름은 {cfg.index_name()} 입니다. API 가 이걸 못 찾습니다."
+        )
+    print("검색에 쓰려면:  STORE=lance uvicorn src.api:app --port 8010")
 
 
 if __name__ == "__main__":
