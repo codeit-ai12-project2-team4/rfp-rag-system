@@ -98,13 +98,12 @@ L4 24GB 에 TEI 셋이 약 4GB 를 붙박이로 쓴다. 생성용은 20GB 다.
 
 | 키 | 모델 | 가중치(fp16) | `mem` |
 |---|---|---|---|
-| `kanana` | Kanana-nano-2.1B | 4.2GB | 0.35 |
 | `exaone` | EXAONE-3.5-2.4B | 4.8GB | 0.38 |
-| `qwen` | Qwen2.5-3B | 6.2GB | 0.45 |
+| `qwen` | Qwen2.5-3B (기본) | 6.2GB | 0.45 |
 | `kanana8b` | Kanana 1.5 8B | 16GB | 0.78 |
 | `luxia8b` | Ko-Llama3-Luxia-8B | 16GB | 0.78 |
 
-작은 셋만 합쳐도 15GB 라 8B 가 낄 자리가 없고, 8B 하나면 20GB 를 꽉 채운다.
+작은 것들만 합쳐도 8B 가 낄 자리가 없고, 8B 하나면 20GB 를 꽉 채운다.
 그래서 상주 대신 교체다. 교체는 30초~2분, 처음 받는 모델은 몇 분 더 걸린다.
 
 `mem` 은 **GPU 전체 대비 비율**이다(남은 양이 아니다). 0.83 을 넘기면 TEI 가
@@ -114,10 +113,33 @@ L4 24GB 에 TEI 셋이 약 4GB 를 붙박이로 쓴다. 생성용은 20GB 다.
 `luxia8b` 는 베이스 모델이라 채팅 템플릿이 없다. `args` 로 Llama-3 템플릿을
 씌워 뒀다. 답이 이상하면 이 모델부터 의심할 것.
 
+### Kanana-nano-2.1B 은 빠졌다 (2026-09-02)
+
+이 이미지의 transformers 가 launch 단계에서 거부한다.
+
+```
+ValueError: The hidden size (1792) is not a multiple of
+            the number of attention heads (24)
+```
+
+config 에 `head_dim: 128` 을 명시해서 `hidden_size / num_heads` 와 일부러 다르게
+잡은 모델인데(1792 vs 24×128=3072), 검증기가 `head_dim` 을 안 본다.
+**우리 설정 문제가 아니다.** 나머지 넷은 `hidden/heads` 가 딱 떨어져서 안 걸린다
+(Qwen 2048/16, EXAONE 2560/32, 8B 둘 다 4096/32).
+
+되살리려면 이미지 태그를 바꿔서 **실제로 떠야** 확인된 것이다. 목록에만 되돌리면
+사용자가 고른 뒤 에러를 보게 된다.
+
+### 크래시는 안 기다린다
+
+`restart: unless-stopped` 라 launch 가 실패하면 조용히 무한 재시도한다.
+`ensure()` 가 컨테이너 재시작 횟수를 같이 보다가 0 을 넘으면 바로 나오면서
+로그 꼬리를 에러에 붙인다. 안 그러면 15분(SWAP_TIMEOUT)을 꽉 채우고 나서야 안다.
+
 ### 확인
 
 ```bash
-python scripts/check_gen_store.py --gen kanana qwen
+python scripts/check_gen_store.py --gen qwen exaone
 ```
 
 ## 노트북에서 쓰기

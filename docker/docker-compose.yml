@@ -105,6 +105,9 @@ services:
   # 이 한 줄을 src/models/sglang.py 의 ensure() 가 대신 친다. UI 에서 모델을
   # 고르면 /ask 가 알아서 갈아끼운다.
   #
+  # 기본값이 Qwen2.5-3B 인 이유 — kanana-nano-2.1b 는 이 이미지의 transformers 가
+  # 거부한다(hidden 1792 / heads 24). config/model_config.py 위쪽 주석 참고.
+  #
   # 확인:  curl localhost:8087/v1/models
   gen:
     image: lmsysorg/sglang:latest
@@ -114,8 +117,8 @@ services:
     volumes:
       - ./hf-cache:/root/.cache/huggingface   # 모델 캐시. 8B 두 개면 32GB 다
     environment:
-      - GEN_MODEL=${GEN_MODEL:-kakaocorp/kanana-nano-2.1b-instruct}
-      - GEN_MEM=${GEN_MEM:-0.35}
+      - GEN_MODEL=${GEN_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+      - GEN_MEM=${GEN_MEM:-0.45}
       - GEN_ARGS=${GEN_ARGS:-}
       - HF_TOKEN=${HF_TOKEN:-}
     # $$ 는 compose 가 아니라 **컨테이너 안 셸**이 풀게 남겨두는 표시다.

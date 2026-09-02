@@ -63,12 +63,15 @@ MODEL_CONFIGS = {
     ),
     # --- VM 안. 고르면 그 모델로 컨테이너가 갈아끼워진다 ------------------
     # 가중치 크기(fp16)와 mem 값. 남는 20GB 안에서 KV 캐시까지 잡아야 한다.
-    "kanana": ModelConfig(  # 2.1B / 약 4.2GB
-        provider="sglang",
-        model="kakaocorp/kanana-nano-2.1b-instruct",
-        max_new_tokens=512,
-        mem="0.35",
-    ),
+    # kakaocorp/kanana-nano-2.1b-instruct 는 뺐다 (2026-09-02).
+    # SGLang 이미지의 transformers 가 LlamaConfig 를 검증할 때
+    #     ValueError: The hidden size (1792) is not a multiple of
+    #                 the number of attention heads (24)
+    # 로 launch 단계에서 죽는다. 이 모델은 head_dim=128 을 config 에 명시해서
+    # hidden_size / num_heads 와 일부러 다르게 잡은 건데(1792 vs 24*128=3072),
+    # 검증기가 head_dim 을 안 본다. 우리 설정 문제가 아니라 이미지 쪽 문제다.
+    # **되살리려면 이미지를 바꿔서 실제로 떠야 확인된다.** 목록에만 넣으면
+    # 사용자가 고르고 15분을 기다린 뒤 에러를 본다.
     "exaone": ModelConfig(  # 2.4B / 약 4.8GB
         provider="sglang",
         model="LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct",

@@ -3,7 +3,7 @@
     python scripts/check_gen_store.py --selftest
         GPU·서버·네트워크 없이 LanceDB 배관만 본다. 30초. 여기부터.
 
-    python scripts/check_gen_store.py --gen kanana
+    python scripts/check_gen_store.py --gen qwen
         SGLang 컨테이너를 그 모델로 갈아끼우고 실제로 답을 받는다.
         처음 받는 모델이면 몇 분. 모델 키는 config/model_config.py 참고.
 
@@ -139,7 +139,7 @@ def main():
     if args.selftest:
         selftest()
     if args.gen is not None:
-        check_gen(args.gen or ["kanana"])
+        check_gen(args.gen or ["qwen"])
     if args.compare:
         compare()
     if not (args.selftest or args.gen is not None or args.compare):

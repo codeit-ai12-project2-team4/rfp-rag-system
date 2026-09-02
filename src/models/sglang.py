@@ -28,12 +28,45 @@ _ROOT = Path(__file__).resolve().parents[2]
 SGLANG_URL = os.environ.get("SGLANG_URL", "http://localhost:8087")
 COMPOSE = os.environ.get("SGLANG_COMPOSE", str(_ROOT / "docker" / "docker-compose.yml"))
 SERVICE = os.environ.get("SGLANG_SERVICE", "gen")
+CONTAINER = os.environ.get("SGLANG_CONTAINER", "bidmate-gen")
 # 처음 받는 8B 는 내려받기만 몇 분이다. 넉넉히 두고, 넘으면 에러 메시지로 알린다.
 SWAP_TIMEOUT = int(os.environ.get("SGLANG_SWAP_TIMEOUT", "900"))
 
 # ponytail: 전역 락. 워커가 하나라 이걸로 충분하다. 워커를 늘리면
 # 프로세스 간 락(파일 락)이나 별도 관리 프로세스로 올려야 한다.
 _swap_lock = threading.Lock()
+
+
+def _restart_count():
+    """컨테이너가 몇 번 재시작했는지. 못 읽으면 0.
+
+    `restart: unless-stopped` 라 launch 가 실패하면 **조용히 무한 재시도한다.**
+    그러면 `current()` 는 영원히 None 이고 호출자는 SWAP_TIMEOUT 을 꽉 채운다.
+    실제로 kanana-nano-2.1b 가 config 검증에서 죽어 이걸 겪었다 — 15분을 기다린
+    끝에 "안 떴습니다" 를 보게 된다. 크래시는 기다릴 이유가 없으니 바로 나간다.
+
+    `--force-recreate` 는 컨테이너를 새로 만들어서 이 값이 0 부터 시작한다.
+    """
+    try:
+        done = subprocess.run(
+            ["docker", "inspect", "-f", "{{.RestartCount}}", CONTAINER],
+            capture_output=True, text=True, timeout=5,
+        )
+        return int(done.stdout.strip()) if done.returncode == 0 else 0
+    except Exception:  # noqa: BLE001 - 상태 확인이 교체를 막으면 안 된다
+        return 0
+
+
+def _tail_logs(lines=30):
+    """실패했을 때 에러 메시지에 붙일 로그 꼬리. 보러 가지 않아도 되게."""
+    try:
+        done = subprocess.run(
+            ["docker", "compose", "-f", COMPOSE, "logs", "--tail", str(lines), SERVICE],
+            capture_output=True, text=True, timeout=10,
+        )
+        return done.stdout.strip() or "(로그 없음)"
+    except Exception as e:  # noqa: BLE001
+        return f"(로그를 못 읽었습니다: {e})"
 
 
 def current(timeout=1.0):
@@ -86,10 +119,16 @@ def ensure(repo, mem="0.45", args=""):
             if current() == repo:
                 print(f"[sglang] {repo} 준비 완료 ({time.time() - started:.0f}초)")
                 return
+            if _restart_count() > 0:
+                raise RuntimeError(
+                    f"{repo} 를 띄우다 죽었습니다 (컨테이너 재시작 루프).\n"
+                    f"모델을 못 받은 게 아니라 서버가 실행에 실패한 것이라 기다려도 안 됩니다.\n\n"
+                    f"{_tail_logs()}"
+                )
             time.sleep(3)
 
     raise RuntimeError(
-        f"{repo} 가 {SWAP_TIMEOUT}초 안에 안 떴습니다.\n"
-        f"  docker compose -f {COMPOSE} logs --tail=50 {SERVICE}\n"
-        f"흔한 원인: GPU 메모리 부족(mem={mem} 을 낮춰 보세요) / 모델 내려받는 중."
+        f"{repo} 가 {SWAP_TIMEOUT}초 안에 안 떴습니다. 아직 내려받는 중일 수 있습니다.\n"
+        f"  docker compose -f {COMPOSE} logs --tail=50 {SERVICE}\n\n"
+        f"{_tail_logs(10)}"
     )
