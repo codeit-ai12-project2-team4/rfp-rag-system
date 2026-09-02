@@ -221,7 +221,8 @@ data/
 notebooks/
 uv.*
 test/
-docker/
+# docker/ 통째로 무시하면 compose 파일이 VM 에 안 올라간다. 무거운 건 캐시뿐이다.
+docker/*-cache/
 evalsets/
 _to_delete/
 docs/

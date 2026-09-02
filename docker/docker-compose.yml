@@ -1,0 +1,145 @@
+# TEI 서버 두 개 — 임베딩과 리랭커.
+#
+#   cd docker
+#   docker compose up -d          띄우기
+#   docker compose logs -f        로그 보기 (처음엔 모델 내려받느라 몇 분 걸린다)
+#   docker compose ps             상태
+#   docker compose down           내리기
+#
+# 확인:
+#   curl localhost:8080/info
+#   curl localhost:8081/info
+#
+# GPU 메모리 (L4 24GB 기준)
+#   임베딩 BGE-m3-ko          0.6B fp16  약 1.3GB
+#   리랭커 bge-reranker-v2-m3-ko 0.6B fp16  약 1.3GB
+#   합쳐도 3GB 안쪽이라 vLLM(7B AWQ, 약 6GB)까지 같이 올릴 수 있다.
+#   vLLM 을 띄울 때는 --gpu-memory-utilization 0.70 정도로 눌러 두면 안전하다.
+
+services:
+  embed:
+    # 89 = Ada Lovelace (L4). 다른 GPU 면 태그를 바꿔야 한다.
+    #   A100/A10G → 86-1.9,  T4 → turing-1.9,  H100 → hopper-1.9
+    #   GPU 없이 CPU 로만 → cpu-1.9
+    image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
+    container_name: bidmate-embed
+    ports:
+      - "8085:80"
+    volumes:
+      - ./tei-cache:/data          # 내려받은 모델을 여기 저장 (다음부터 빠름)
+    environment:
+      - HF_HOME=/data
+    command:
+      - --model-id=dragonkue/snowflake-arctic-embed-l-v2.0-ko
+      # - --model-id=dragonkue/BGE-m3-ko
+      # - --model-id=Qwen/Qwen3-Embedding-0.6B
+      # - --pooling=last-token
+      - --max-client-batch-size=64   # 한 번에 보낼 수 있는 문장 수. 기본값 32.
+      - --max-batch-tokens=16384
+      - --auto-truncate              # 8192 토큰 넘으면 자른다 (에러 대신)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+  
+  sparse:
+    image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
+    container_name: bidmate-sparse
+    ports:
+      - "8084:80"                    # Sparse 서비스용 8084 포트 개방
+    volumes:
+      - ./tei-cache:/data
+    environment:
+      - HF_HOME=/data
+    command:
+      - --model-id=telepix/PIXIE-Splade-v1.5
+      - --pooling=splade             # ⚠️ SPLADE 모델 연산을 위해 필수 지정
+      - --max-client-batch-size=64
+      - --max-batch-tokens=16384
+      - --auto-truncate
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:89-1.9
+    container_name: bidmate-rerank
+    ports:
+      - "8086:80"
+    volumes:
+      - ./tei-cache:/data
+    environment:
+      - HF_HOME=/data
+    command:
+      # - --model-id=BAAI/bge-reranker-v2-m3
+      - --model-id=dragonkue/bge-reranker-v2-m3-ko
+      - --max-client-batch-size=64
+      - --auto-truncate
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # 생성 — SGLang. **한 번에 한 모델만.**
+  #
+  # L4 24GB 에서 TEI 셋이 약 4GB 를 쓰므로 생성용은 20GB(=0.83)뿐이다.
+  # 8B fp16 은 그것만 16GB 라 여러 모델을 같이 못 띄운다. 그래서 모델을
+  # 환경변수로 받고, 바꿀 때는 컨테이너를 통째로 다시 만든다.
+  #
+  #   GEN_MODEL=Qwen/Qwen2.5-3B-Instruct GEN_MEM=0.45 \
+  #     docker compose up -d --force-recreate gen
+  #
+  # 이 한 줄을 src/models/sglang.py 의 ensure() 가 대신 친다. UI 에서 모델을
+  # 고르면 /ask 가 알아서 갈아끼운다.
+  #
+  # 확인:  curl localhost:8087/v1/models
+  gen:
+    image: lmsysorg/sglang:latest
+    container_name: bidmate-gen
+    ports:
+      - "8087:30000"
+    volumes:
+      - ./hf-cache:/root/.cache/huggingface   # 모델 캐시. 8B 두 개면 32GB 다
+    environment:
+      - GEN_MODEL=${GEN_MODEL:-kakaocorp/kanana-nano-2.1b-instruct}
+      - GEN_MEM=${GEN_MEM:-0.35}
+      - GEN_ARGS=${GEN_ARGS:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+    # $$ 는 compose 가 아니라 **컨테이너 안 셸**이 풀게 남겨두는 표시다.
+    # GEN_ARGS 가 빈 문자열이어도 되게 하려면 셸을 거쳐야 한다.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        python3 -m sglang.launch_server
+        --model-path "$$GEN_MODEL"
+        --host 0.0.0.0 --port 30000
+        --mem-fraction-static "$$GEN_MEM"
+        --context-length 8192
+        --trust-remote-code
+        $$GEN_ARGS
+    # 컨텍스트 6,000자 + 답변이면 8192 토큰으로 충분하다. 늘리면 KV 캐시가
+    # 그만큼 커져서 8B 가 안 올라간다.
+    shm_size: "8gb"
+    depends_on:
+      - rerank      # 두 컨테이너가 동시에 모델을 받으면 DNS 조회가 몰려 죽는다
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
