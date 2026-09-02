@@ -26,7 +26,7 @@ DEFAULT_MAX_TOKENS_OPENAI = 5000
 DEFAULT_MAX_TOKENS_HF = 512
 """HuggingFace 로컬 모델(시나리오 A)의 기본 생성 길이."""
 
-DEFAULT_JUDGE_MAX_TOKENS = 10
+DEFAULT_JUDGE_MAX_TOKENS = 2000
 """ask()의 기본값. YES/NO 같은 짧은 채점용이라 작게 잡는다."""
 
 SYSTEM_PROMPT = """당신은 B2G 입찰 컨설팅 회사 입찰메이트의 RFP 분석 어시스턴트입니다.
