@@ -214,16 +214,37 @@ def format_context(chunks, generation=False):
             A/B 를 이 인자 하나로 켠다.
 
     Returns:
-        `[1] 사업명 · 발주기관 · 절제목` 머리를 붙이고 `---` 로 이은 문자열.
+        `[1] 사업명 · 발주기관 · 공고번호 · 마감 …` 머리를 붙이고 `---` 로 이은 문자열.
     """
     blocks = []
     for i, chunk in enumerate(chunks, 1):
-        title = chunk.metadata.get("title", "")
-        agency = chunk.metadata.get("agency", "")
-        section = chunk.metadata.get("section", "")
-        head = f"[{i}] {title} · {agency}"
-        if section:
-            head += f" · {section}"
+        meta = chunk.metadata
+        # **NaN 을 걸러야 한다.** 메타데이터가 pandas 에서 오므로 빈 칸이
+        # float('nan') 이다. 그대로 f-string 에 넣으면 프롬프트에 "nan" 이
+        # 박히고, 모델이 그걸 사업명으로 읽는다.
+        def value(key):
+            got = meta.get(key)
+            return "" if got is None or got != got else str(got).strip()
+
+        # 사업명·발주기관만 넣고 있었다. 컨설턴트가 출처를 되짚을 때 필요한
+        # 건 공고번호와 마감일이다. 둘 다 CSV 값이라 본문보다 정확하다.
+        #
+        # **사업금액은 일부러 안 넣는다.** CSV 의 사업금액은 배정예산/추정가격
+        # 이고, 제안요청서 본문이 말하는 예산과 다를 수 있다. 머리에 넣으면
+        # 모델이 본문 대신 그걸 읽어 답하고, 채점은 컨텍스트 안에 있으니
+        # 맞다고 센다 — 점수만 오르고 답은 틀리는 쪽이다.
+        # `section` 도 뺐다. `split_by_section` 으로 자른 청크에만 있는데
+        # 전처리팀 파이프라인은 recursive 라 **늘 비어 있었다.**
+        close = value("bid_close_at")[:10]
+        parts = [
+            value("title"),
+            value("agency"),
+            value("notice_no"),
+            f"마감 {close}" if close else "",
+        ]
+        # `[n]` 은 붙여 쓴다. 이 번호가 그대로 인용 번호이고 `sources()` 의
+        # n 과 짝이 맞아야 한다.
+        head = (f"[{i}] " + " · ".join(part for part in parts if part)).rstrip()
         blocks.append(head + "\n" + body(chunk, generation))
     return "\n\n---\n\n".join(blocks)
 

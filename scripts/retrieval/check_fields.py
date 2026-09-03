@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -93,7 +94,38 @@ def test_표가_하나인가():
     print("표 한 개 유지 OK")
 
 
+def test_생성_컨텍스트():
+    """메타데이터가 프롬프트 머리로 실제로 건너가는가. **NaN 이 안 새는가.**
+
+    머리는 `format_context` 가 만든다. 여기 `nan` 이 박히면 모델이 그걸
+    사업명으로 읽는다 — 메타데이터가 pandas 에서 오므로 빈 칸이 float('nan') 이다.
+    """
+    from langchain_core.documents import Document
+
+    from retriever import format_context
+
+    nan = float("nan")
+    chunks = [
+        Document(page_content="본문 하나", metadata={
+            "title": "클라우드 전환 사업", "agency": "한국전력공사",
+            "notice_no": "20240330003", "bid_close_at": "2024-04-15 17:00:00",
+            "gen": "표가 살아 있는 본문"}),
+        # CSV 병합이 안 된 문서. 전부 비어 있다.
+        Document(page_content="본문 둘", metadata={
+            "title": nan, "agency": None, "notice_no": nan, "bid_close_at": nan}),
+    ]
+    got = format_context(chunks, generation=True)
+    assert "[1] 클라우드 전환 사업 · 한국전력공사 · 20240330003 · 마감 2024-04-15" in got, got
+    assert "nan" not in got.lower(), "NaN 이 프롬프트에 샜다"
+    # 생성용 본문이 들어갔나 (9/8 결정: 표 구조를 살린 쪽)
+    assert "표가 살아 있는 본문" in got, got
+    # 인용 번호는 `sources()` 의 n 과 짝이 맞아야 한다
+    assert [int(n) for n in re.findall(r"\[(\d+)\]", got)] == [1, 2], got
+    print("생성 컨텍스트 OK — 머리 4항목 · NaN 차단 · gen 본문 · 인용 번호")
+
+
 if __name__ == "__main__":
     test_표가_하나인가()
     test_한_바퀴()
+    test_생성_컨텍스트()
     print("\n전부 통과")
