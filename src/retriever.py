@@ -262,18 +262,26 @@ def format_context(chunks, generation=False):
         # 읽는 사람은 어느 쪽인지 모른 채 숫자만 받는다 — 컨설턴트가 제일
         # 먼저 확인하는 값이라 그게 제일 나쁘다. 모델이 라벨을 못 잡는 게
         # 아니라, **우리가 그 구분을 안 갖고 있었다**(크롤러가 버렸다).
-        # 구분이 없는 행(처음 받은 100건)은 금액을 아예 안 넣는다.
+        #
+        # 9/3 실측(135건): 본문과 일치 63% · 불일치 13% · **본문에 금액 표기가
+        # 아예 없음 19%.** 불일치 18건은 틀린 값이 아니라 기준이 다른 값이다 —
+        # 본문은 부가세 포함액과 공급가액(÷1.1)을 나란히 적고, CSV 값은 그보다
+        # 0.6~1.0% 크다(한 건은 정확히 ×1.1). 라벨이 있으면 읽는 사람이 가른다.
+        # 넣는 진짜 이유는 19% 다 — 그 문서들은 머리가 유일한 출처다.
+        # 구분을 모르는 행(2026-09-03 이전에 받은 135건)은 `공고 금액` 으로 적는다.
+        # 라벨 없이 숫자만 주는 것보다 낫고, 모르는 걸 아는 척하지도 않는다.
         #
         # `section` 은 뺐다. `split_by_section` 으로 자른 청크에만 있는데
         # 전처리팀 파이프라인은 recursive 라 **늘 비어 있었다.**
         close = value("bid_close_at")[:10]
-        kind, amount = value("budget_kind"), value("budget")
+        amount = value("budget")
+        kind = value("budget_kind") or "공고 금액"
         parts = [
             value("title"),
             value("agency"),
             value("notice_no"),
             f"마감 {close}" if close else "",
-            f"{kind} {money(amount)}" if kind and amount else "",
+            f"{kind} {money(amount)}" if amount else "",
         ]
         # `[n]` 은 붙여 쓴다. 이 번호가 그대로 인용 번호이고 `sources()` 의
         # n 과 짝이 맞아야 한다.

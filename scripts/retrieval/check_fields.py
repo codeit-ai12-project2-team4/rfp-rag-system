@@ -118,7 +118,7 @@ def test_생성_컨텍스트():
             "notice_no": "20240330003", "bid_close_at": "2024-04-15 17:00:00",
             "budget": "150000000.0", "budget_kind": "배정예산",
             "gen": "표가 살아 있는 본문"}),
-        # 금액은 있는데 배정/추정 구분이 없는 행(처음 받은 100건). 금액을 안 넣는다.
+        # 금액은 있는데 배정/추정 구분이 없는 행. `공고 금액` 으로 적는다.
         Document(page_content="본문 둘", metadata={
             "title": "옛 공고", "agency": "기관",
             "budget": "99000000", "budget_kind": nan}),
@@ -129,7 +129,8 @@ def test_생성_컨텍스트():
     got = format_context(chunks, generation=True)
     assert ("[1] 클라우드 전환 사업 · 한국전력공사 · 20240330003 · 마감 2024-04-15"
             " · 배정예산 1억 5,000만원") in got, got
-    assert "9,900만" not in got, "구분 없는 금액이 새어 나갔다"
+    assert "공고 금액 9,900만원" in got, got   # 구분을 모르면 라벨을 낮춰 단다
+    assert "배정예산 9,900만" not in got, "모르는 구분을 아는 척했다"
     assert "nan" not in got.lower(), "NaN 이 프롬프트에 샜다"
     # 생성용 본문이 들어갔나 (9/8 결정: 표 구조를 살린 쪽)
     assert "표가 살아 있는 본문" in got, got

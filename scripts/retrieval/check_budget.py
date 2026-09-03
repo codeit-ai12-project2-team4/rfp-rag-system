@@ -61,6 +61,7 @@ def main():
 
     tally = Counter()
     mismatched = []
+    ratios = []
     for line in path.open(encoding="utf-8"):
         row = json.loads(line)
         meta = row["metadata"]
@@ -83,6 +84,7 @@ def main():
             tally["불일치"] += 1
             near = sorted(found, key=lambda v: abs(v - want))[:3]
             mismatched.append((meta.get("사업명") or meta.get("source"), want, near))
+            ratios.append(want / near[0] if near[0] else 0)
 
     total = sum(tally.values())
     if not total:
@@ -99,9 +101,17 @@ def main():
         for title, want, near in mismatched[:10]:
             print(f"  {str(title)[:38]:<38} {want:>15,} ← {[f'{v:,}' for v in near]}")
 
+    # **어긋난 정도가 얼마인지가 판정을 가른다.** 배가 다르면 다른 값이고,
+    # 1% 안쪽이면 기준이 다른 같은 값이다(부가세·부대비). 후자면 라벨을 붙여
+    # 넣는 게 맞다 — 본문에 금액이 아예 없는 문서에는 머리가 유일한 출처다.
+    if ratios:
+        close = sum(1 for r in ratios if 0.99 <= r <= 1.11)
+        print(f"\n불일치 {len(ratios)}건 중 CSV/본문 비가 0.99~1.11 인 것: {close}건")
+        print("  (1.1 = 부가세, 1.00~1.01 = 부대비·반올림. 그 밖이면 다른 값이다)")
+
     print(
-        "\n불일치가 적으면 머리에 넣어도 된다. 많으면 라벨(배정예산/추정가격)이"
-        "\n있어도 본문과 다른 숫자를 주는 것이라 넣지 않는 게 맞다."
+        "\n본문없음 비율이 높으면 머리에 넣는 게 맞다 — 그 문서엔 다른 출처가 없다."
+        "\n불일치가 '기준이 다른 같은 값' 이면 라벨로 갈린다. 배가 다르면 빼야 한다."
     )
     return 0
 
