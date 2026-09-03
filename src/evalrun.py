@@ -101,6 +101,18 @@ def estimate(count, model="mini", judge=True, judge_model="nano"):
     return round(count * (per(model) + (per(judge_model) if judge else 0.0)), 4)
 
 
+def _key(name):
+    """파일명 대조용 열쇠. **병합이 쓰는 그 규칙을 그대로 쓴다.**
+
+    맥에서 만든 평가 세트와 리눅스에서 만든 청크는 한글 파일명의 유니코드
+    정규화가 다르다(NFD vs NFC). 글자로는 같은데 문자열로는 다르다 —
+    그냥 비교하면 하나도 안 맞고, 업로드가 통째로 거절된다.
+    """
+    from preprocessing.rfp.meta import _normalize_filename
+
+    return _normalize_filename(str(name))
+
+
 @lru_cache(maxsize=1)
 def _corpus():
     """코퍼스의 doc_id 와, 파일명 → doc_id 표.
@@ -122,8 +134,7 @@ def _corpus():
         ids.add(doc_id)
         name = str(chunk.metadata.get("file_name") or "")
         if name:
-            by_file.setdefault(name, doc_id)
-            by_file.setdefault(Path(name).stem, doc_id)
+            by_file.setdefault(_key(name), doc_id)
     return ids, by_file
 
 
@@ -155,7 +166,7 @@ def normalize(rows):
 
         doc_id = str(row.get("doc_id") or "")
         if doc_id and doc_id not in ids:
-            found = by_file.get(doc_id) or by_file.get(Path(doc_id).stem)
+            found = by_file.get(_key(doc_id))
             if found:
                 row["doc_id"] = found
                 converted += 1
