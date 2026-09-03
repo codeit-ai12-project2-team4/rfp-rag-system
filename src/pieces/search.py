@@ -22,6 +22,7 @@ Hybrid  둘을 섞는다.             보통 이게 제일 낫다
 """
 
 import hashlib
+import json
 import os
 import time
 from collections import OrderedDict
@@ -134,11 +135,18 @@ class SpladeModel(Enum):
 
 
 def chunk_signature(chunks):
-    """이 청크 묶음이 무엇인지 짧은 지문으로.
+    """이 청크 묶음이 무엇인지 짧은 지문으로. **본문과 메타데이터를 다 본다.**
 
     청크 이름은 그대로인데 내용만 바뀌는 일이 잦다 — 목차 제거는 **줄**을
     지우므로 청크 개수가 안 변한다. 실제로 9,189개 그대로였다. 개수만 보면
-    못 잡으니 본문을 해시한다.
+    못 잡으니 해시한다.
+
+    **메타데이터를 넣는 이유** (2026-09-03): 본문만 해시했더니, CSV 를 고쳐
+    doc_id 가 `nofile-<해시>` 에서 `20240311752-2` 로 바뀐 청크 파일이
+    "같은 청크" 로 판정됐다. `prepare.py` 는 색인을 다시 안 만들었고, 색인에는
+    옛 doc_id 가 그대로 남았다. BM25 는 청크 파일을 직접 읽어 새 doc_id 를 쓰고
+    Dense 는 색인의 옛 doc_id 를 쓰니, **둘이 서로 다른 문서를 가리켰다.**
+    eval 에서 Dense MRR 0.003 으로 나온 게 이것이다. 벡터는 멀쩡했다.
 
     Args:
         chunks: 청크 리스트.
@@ -149,6 +157,11 @@ def chunk_signature(chunks):
     digest = hashlib.md5()
     for chunk in chunks:
         digest.update(chunk.page_content.encode())
+        digest.update(b"\x00")
+        digest.update(
+            json.dumps(chunk.metadata, ensure_ascii=False, sort_keys=True,
+                       default=str).encode()
+        )
     return digest.hexdigest()[:12]
 
 
