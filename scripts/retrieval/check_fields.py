@@ -102,26 +102,38 @@ def test_생성_컨텍스트():
     """
     from langchain_core.documents import Document
 
-    from retriever import format_context
+    from retriever import format_context, money
+
+    assert money("150000000.0") == "1억 5,000만원", money("150000000.0")
+    assert money("1500000000") == "15억원", money("1500000000")   # 공백이 남으면 안 된다
+    assert money("46200000") == "4,620만원"
+    assert money("abc") == "abc"   # 못 읽으면 그대로
 
     nan = float("nan")
     chunks = [
         Document(page_content="본문 하나", metadata={
             "title": "클라우드 전환 사업", "agency": "한국전력공사",
             "notice_no": "20240330003", "bid_close_at": "2024-04-15 17:00:00",
+            "budget": "150000000.0", "budget_kind": "배정예산",
             "gen": "표가 살아 있는 본문"}),
-        # CSV 병합이 안 된 문서. 전부 비어 있다.
+        # 금액은 있는데 배정/추정 구분이 없는 행(처음 받은 100건). 금액을 안 넣는다.
         Document(page_content="본문 둘", metadata={
+            "title": "옛 공고", "agency": "기관",
+            "budget": "99000000", "budget_kind": nan}),
+        # CSV 병합이 안 된 문서. 전부 비어 있다.
+        Document(page_content="본문 셋", metadata={
             "title": nan, "agency": None, "notice_no": nan, "bid_close_at": nan}),
     ]
     got = format_context(chunks, generation=True)
-    assert "[1] 클라우드 전환 사업 · 한국전력공사 · 20240330003 · 마감 2024-04-15" in got, got
+    assert ("[1] 클라우드 전환 사업 · 한국전력공사 · 20240330003 · 마감 2024-04-15"
+            " · 배정예산 1억 5,000만원") in got, got
+    assert "9,900만" not in got, "구분 없는 금액이 새어 나갔다"
     assert "nan" not in got.lower(), "NaN 이 프롬프트에 샜다"
     # 생성용 본문이 들어갔나 (9/8 결정: 표 구조를 살린 쪽)
     assert "표가 살아 있는 본문" in got, got
     # 인용 번호는 `sources()` 의 n 과 짝이 맞아야 한다
-    assert [int(n) for n in re.findall(r"\[(\d+)\]", got)] == [1, 2], got
-    print("생성 컨텍스트 OK — 머리 4항목 · NaN 차단 · gen 본문 · 인용 번호")
+    assert [int(n) for n in re.findall(r"\[(\d+)\]", got)] == [1, 2, 3], got
+    print("생성 컨텍스트 OK — 금액 라벨 · 구분 없으면 생략 · NaN 차단 · 인용 번호")
 
 
 if __name__ == "__main__":

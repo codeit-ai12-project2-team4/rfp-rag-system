@@ -201,6 +201,33 @@ def retrieve(
     return pipeline(query).chunks
 
 
+def money(value):
+    """`150000000.0` → `1억 5,000만원`. 못 읽으면 원래 문자열 그대로.
+
+    프롬프트에 `150000000.0` 을 그대로 넣으면 모델이 자릿수를 자주 틀린다.
+    `.0` 은 pandas 가 숫자로 읽어서 붙는 꼬리다.
+
+    Args:
+        value: 금액 문자열이나 숫자.
+
+    Returns:
+        str: 사람이 읽는 꼴.
+    """
+    try:
+        won = int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return str(value)
+    eok, man = divmod(won, 10**8)
+    man //= 10**4
+    if not eok and not man:
+        return f"{won:,}원"
+    # 억만 있고 만 자리가 0 이면 `15억 원` 처럼 공백이 남는다. 붙여서 짓는다.
+    return " ".join(
+        part for part in (f"{eok}억" if eok else "", f"{man:,}만" if man else "")
+        if part
+    ) + "원"
+
+
 def format_context(chunks, generation=False):
     """청크를 번호 붙여 프롬프트용 문자열로 잇는다.
 
@@ -227,20 +254,26 @@ def format_context(chunks, generation=False):
             return "" if got is None or got != got else str(got).strip()
 
         # 사업명·발주기관만 넣고 있었다. 컨설턴트가 출처를 되짚을 때 필요한
-        # 건 공고번호와 마감일이다. 둘 다 CSV 값이라 본문보다 정확하다.
+        # 건 공고번호와 마감일과 금액이다. 전부 CSV(나라장터 API) 값이다.
         #
-        # **사업금액은 일부러 안 넣는다.** CSV 의 사업금액은 배정예산/추정가격
-        # 이고, 제안요청서 본문이 말하는 예산과 다를 수 있다. 머리에 넣으면
-        # 모델이 본문 대신 그걸 읽어 답하고, 채점은 컨텍스트 안에 있으니
-        # 맞다고 센다 — 점수만 오르고 답은 틀리는 쪽이다.
-        # `section` 도 뺐다. `split_by_section` 으로 자른 청크에만 있는데
+        # **금액은 `배정예산 1억 5,000만원` 처럼 어느 쪽인지 붙여서만 넣는다.**
+        # 배정예산은 발주처가 잡아 둔 돈이고 추정가격은 조달청 산정치라 뜻이
+        # 다르다. 라벨 없이 "사업금액 …" 이라고만 주면 모델은 그대로 옮겨 쓰고,
+        # 읽는 사람은 어느 쪽인지 모른 채 숫자만 받는다 — 컨설턴트가 제일
+        # 먼저 확인하는 값이라 그게 제일 나쁘다. 모델이 라벨을 못 잡는 게
+        # 아니라, **우리가 그 구분을 안 갖고 있었다**(크롤러가 버렸다).
+        # 구분이 없는 행(처음 받은 100건)은 금액을 아예 안 넣는다.
+        #
+        # `section` 은 뺐다. `split_by_section` 으로 자른 청크에만 있는데
         # 전처리팀 파이프라인은 recursive 라 **늘 비어 있었다.**
         close = value("bid_close_at")[:10]
+        kind, amount = value("budget_kind"), value("budget")
         parts = [
             value("title"),
             value("agency"),
             value("notice_no"),
             f"마감 {close}" if close else "",
+            f"{kind} {money(amount)}" if kind and amount else "",
         ]
         # `[n]` 은 붙여 쓴다. 이 번호가 그대로 인용 번호이고 `sources()` 의
         # n 과 짝이 맞아야 한다.

@@ -44,6 +44,9 @@ HEADER = [
     "공고 번호", "공고 차수", "사업명", "사업 금액", "발주 기관",
     "공개 일자", "입찰 참여 시작일", "입찰 참여 마감일",
     "사업 요약", "파일형식", "파일명", "텍스트",
+    # 2026-09-03 추가. **맨 뒤에 붙인다** — 중간에 끼우면 옛 헤더로 읽는 쪽이
+    # 값을 한 칸씩 밀려 읽는다(텍스트 자리에 금액구분이 들어간다).
+    "금액구분",
 ]
 
 # 첨부 10개 중 어느 게 제안요청서인가. 앞에 있을수록 우선.
@@ -113,7 +116,17 @@ def to_row(item, file_name):
         HEADER 순서의 리스트.
     """
     # 배정예산이 비면 추정가격으로. 둘 다 없는 공고가 실제로 있다.
-    amount = _text(item.get("asignBdgtAmt")) or _text(item.get("presmptPrce"))
+    #
+    # **어느 쪽이었는지 같이 적는다.** 예전에는 버렸다. 배정예산은 발주처가
+    # 잡아 둔 돈이고 추정가격은 조달청 산정치라 뜻이 다른데, 합쳐 놓으면
+    # 생성 모델한테도 "사업금액 1,500만원" 이라고만 줄 수 있다.
+    # 어느 쪽인지 붙여 주면 모델은 그대로 옮겨 쓴다 — 못 잡아내서가 아니라
+    # 우리가 그 정보를 안 갖고 있던 것이다.
+    amount = _text(item.get("asignBdgtAmt"))
+    kind = "배정예산" if amount else ""
+    if not amount:
+        amount = _text(item.get("presmptPrce"))
+        kind = "추정가격" if amount else ""
     # 수요기관이 실제 발주처다. 공고기관은 조달청인 경우가 많다.
     agency = _text(item.get("dminsttNm")) or _text(item.get("ntceInsttNm"))
     return [
@@ -129,6 +142,7 @@ def to_row(item, file_name):
         Path(file_name).suffix.lstrip(".").lower(),
         file_name,
         "",
+        kind,
     ]
 
 
@@ -444,11 +458,42 @@ def append_csv(rows, path=None):
     """
     path = path or settings.META_CSV
     fresh = not path.exists()
+    if not fresh:
+        upgrade_header(path)
     with open(path, "a", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         if fresh:
             writer.writerow(HEADER)
         writer.writerows(rows)
+
+
+def upgrade_header(path):
+    """옛 CSV 에 새 컬럼 자리를 만든다. 이미 맞으면 아무 일도 안 한다.
+
+    컬럼이 늘었는데 헤더를 그대로 두고 붙이면, 읽는 쪽은 옛 이름 열두 개로
+    열세 칸을 맞추다가 **마지막 값을 잃거나 한 칸씩 밀려 읽는다.** 조용히
+    틀린 데이터가 되고, 화면에서야 이상한 값으로 나타난다.
+
+    Args:
+        path (Path): data_list.csv 경로.
+
+    Returns:
+        int: 자리를 채운 행 수. 이미 맞으면 0.
+    """
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows or rows[0] == HEADER:
+        return 0
+    extra = len(HEADER) - len(rows[0])
+    if extra <= 0:  # 우리가 모르는 헤더다. 건드리지 않는다
+        return 0
+    body = [row + [""] * (len(HEADER) - len(row)) for row in rows[1:]]
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(HEADER)
+        writer.writerows(body)
+    print(f"data_list.csv 헤더를 갱신했습니다 (+{extra}칸, {len(body)}행)")
+    return len(body)
 
 
 def selftest():
@@ -473,6 +518,26 @@ def selftest():
     assert len(row) == len(HEADER)
     assert dict(zip(HEADER, row))["발주 기관"] == "한영대학"   # 조달청이 아니다
     assert dict(zip(HEADER, row))["사업 금액"] == "130000000"  # 배정예산 우선
+    assert dict(zip(HEADER, row))["금액구분"] == "배정예산"
+    only_estimate = {**item, "asignBdgtAmt": "", "presmptPrce": "9000000"}
+    assert dict(zip(HEADER, to_row(only_estimate, "x.hwp")))["금액구분"] == "추정가격"
+    no_amount = {**item, "asignBdgtAmt": "", "presmptPrce": ""}
+    assert dict(zip(HEADER, to_row(no_amount, "x.hwp")))["금액구분"] == ""
+
+    # 옛 헤더(금액구분 없음)를 만나면 자리를 채우고, 두 번째는 아무 일도 안 한다
+    import tempfile
+
+    old_csv = Path(tempfile.mkdtemp()) / "data_list.csv"
+    with open(old_csv, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(HEADER[:-1])
+        w.writerow(["20240330003", "0", "옛 공고", "5", "기관", "", "", "", "", "hwp", "a.hwp", ""])
+    assert upgrade_header(old_csv) == 1
+    assert upgrade_header(old_csv) == 0
+    with open(old_csv, encoding="utf-8-sig", newline="") as f:
+        got = list(csv.DictReader(f))
+    assert got[0]["파일명"] == "a.hwp", got[0]   # 밀려 읽히지 않았나
+    assert got[0]["금액구분"] == "", got[0]
     assert dict(zip(HEADER, row))["파일형식"] == "hwpx"
 
     assert pick_attachment({"ntceSpecFileNm1": "a.zip", "ntceSpecDocUrl1": "u"}) is None
