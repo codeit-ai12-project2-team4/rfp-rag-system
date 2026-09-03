@@ -54,7 +54,8 @@ def test_cached_rows():
     assert row["clean_text_for_generation"] == "표 있는 본문", row
     assert row["extractor"] == "hwp5-table", row
     assert row["사업기간"] == "12개월", row  # 본문에서 뽑은 건 남는다
-    for gone in ("사업명", "공고번호", "메타매칭방식", "source"):
+    assert row["filename"] == "가.hwp", row  # 한글 키가 아니라 영문이다
+    for gone in ("사업명", "공고번호", "메타매칭방식", "source", "파일명"):
         assert gone not in row, f"{gone} 가 남았다 — 병합이 한 번 더 붙는다"
     path.unlink()
     print("_cached_rows OK")
@@ -85,7 +86,19 @@ def test_sync_docs():
         got = lance_store.sync_docs("t", second, embedder, verbose=False)
         assert got == (0, 0, 3), got
 
+        # **본문은 그대로인데 메타만 바뀐 경우.** CSV 를 고쳐 제목이 비로소
+        # 채워지는 게 정확히 이 모양이다. 본문만 보면 그냥 지나간다.
+        retitled = [doc(d.page_content, d.metadata["doc_id"]) for d in second]
+        retitled[1].metadata["사업명"] = "이제 제목이 생겼다"
+        got = lance_store.sync_docs("t", retitled, embedder, verbose=False)
+        assert got == (0, 0, 2), got  # B 만 바뀜 → 새 0 · 빠짐 0 · 그대로 2
+        table = lance_store._db().open_table("t")
+        metas = [json.loads(r["meta"]) for r in
+                 table.search().select(["meta"]).limit(None).to_arrow().to_pylist()]
+        assert any(m.get("사업명") == "이제 제목이 생겼다" for m in metas), metas
+
         # 빠진 공고는 지운다
+        second = retitled
         left = [d for d in second if d.metadata["doc_id"] != "B"]
         got = lance_store.sync_docs("t", left, embedder, verbose=False)
         assert got == (0, 1, 2), got

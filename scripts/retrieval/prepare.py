@@ -52,14 +52,23 @@ def newer_raw(made):
     **파일이 있는지만 보면 이걸 못 잡는다** — 있긴 있으니까 O 로 지나간다.
     상태 파일 없이 mtime 만 본다. 크론이 한 번 실패해도 구멍이 안 생긴다.
 
+    **`data_list.csv` 도 원본으로 친다.** 제목·발주기관·금액은 전부 이 CSV 에서
+    온다. CSV 만 고치고 raw 는 안 건드리면 여기서 0 이 나와 전부 O 로 지나가고,
+    화면에는 제목이 계속 안 나온다. 2026-09-03 에 실제로 그랬다.
+
     Args:
         made (Path): 만들어진 산출물.
 
     Returns:
-        int: 더 새로운 원본 파일 수. 없으면 0.
+        int: 더 새로운 원본 파일 수. CSV 만 새로우면 1.
     """
     if not made.exists() or not settings.RAW.exists():
         return 0
+    if settings.META_CSV.exists() and settings.META_CSV.stat().st_mtime > made.stat().st_mtime:
+        return 1 + sum(
+            1 for f in settings.RAW.glob("*")
+            if f.is_file() and f.stat().st_mtime > made.stat().st_mtime
+        )
     cut = made.stat().st_mtime
     return sum(1 for f in settings.RAW.glob("*")
                if f.is_file() and f.stat().st_mtime > cut)
