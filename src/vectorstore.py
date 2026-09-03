@@ -38,6 +38,10 @@ warnings.filterwarnings("ignore", message=".*langchain-community.*")
 
 from langchain_community.vectorstores.faiss import FAISS
 
+# **같은 함수를 여기 또 두지 않는다.** 본문만 해시하는 옛 판이 여기 있어서,
+# `pieces.search` 쪽을 고쳐도 faiss 경로는 옛 규칙으로 도장을 찍고 있었다.
+from pieces.search import chunk_signature
+
 from config import settings
 
 
@@ -94,14 +98,6 @@ def stamp(path, embedder, store, chunks=None):
             indent=2,
         )
     )
-
-
-def chunk_signature(chunks):
-    """청크 본문의 md5 앞 12자. 같은 내용이면 같은 값이 나온다."""
-    digest = hashlib.md5()
-    for chunk in chunks:
-        digest.update(chunk.page_content.encode())
-    return digest.hexdigest()[:12]
 
 
 def verify(path, name, embedder, store, chunks=None):
