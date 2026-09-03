@@ -33,6 +33,11 @@ class ModelConfig:
         mem: sglang 용 `--mem-fraction-static`. GPU **전체** 대비 비율.
         args: sglang 서버에 그 모델에만 붙일 추가 인자 문자열.
         extra: HuggingFace pipeline() 호출 시 추가로 넘길 키워드 인자.
+        usd_per_call: 문항 하나를 처리하는 데 드는 대략의 달러. **여기가 유일한
+            출처다** — UI 의 예상 비용도 평가 실행기도 이 값을 쓴다. 두 군데에
+            적으면 한쪽만 고치게 된다. `sglang`/`huggingface` 는 우리 GPU 라 0 이다.
+            RFP 발췌가 길어 입력이 5~6천 자쯤 되는 걸 기준으로 잡았다
+            (9/8 실측: mini 로 191문항 답변+채점에 $1.34).
     """
 
     provider: str
@@ -45,6 +50,7 @@ class ModelConfig:
     mem: str | None = None
     args: str = ""
     extra: dict = field(default_factory=dict)
+    usd_per_call: float = 0.0
 
 
 MODEL_CONFIGS = {
@@ -54,12 +60,14 @@ MODEL_CONFIGS = {
         model="gpt-5-mini",
         reasoning_effort="medium",
         verbosity="medium",
+        usd_per_call=0.0050,
     ),
     "nano": ModelConfig(
         provider="openai",
         model="gpt-5-nano",
         reasoning_effort="low",
         verbosity="low",
+        usd_per_call=0.0020,
     ),
     # --- VM 안. 고르면 그 모델로 컨테이너가 갈아끼워진다 ------------------
     # 가중치 크기(fp16)와 mem 값. 남는 20GB 안에서 KV 캐시까지 잡아야 한다.
