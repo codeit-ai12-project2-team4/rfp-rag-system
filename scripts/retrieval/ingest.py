@@ -18,8 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
-from config import retrieval as cfg  # noqa: E402
-from config import settings  # noqa: E402
+from config import retrieval as cfg
+from config import settings
 
 
 def target_name(docs, size, overlap):
@@ -37,20 +37,27 @@ def main():
     parser.add_argument("--size", type=int, default=cfg.SIZE)
     parser.add_argument("--overlap", type=int, default=cfg.OVERLAP)
     parser.add_argument("--src", help="전처리팀 산출 jsonl. 생략하면 찾아본다")
-    parser.add_argument("--run", action="store_true",
-                        help="전처리 파이프라인부터 돌린다 (원본 문서 필요)")
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help="전처리 파이프라인부터 돌린다 (원본 문서 필요)",
+    )
     args = parser.parse_args()
 
     settings.make_dirs()
     name = target_name(args.docs, args.size, args.overlap)
-    dst = settings.CHUNKS / f"chunks_{name}.jsonl"
+    dst = settings.CHUNKS / f"{name}.jsonl"
 
     if args.run:
-        from preprocessing.rfp_preprocessing_pipeline import run_pipeline
+        from preprocessing.rfp import run_pipeline
 
-        run_pipeline(settings.DATA / "raw", settings.PROCESSED,
-                     enable_chunk_output=True,
-                     chunk_size=args.size, chunk_overlap=args.overlap)
+        run_pipeline(
+            settings.DATA / "raw",
+            settings.PROCESSED,
+            enable_chunk_output=True,
+            chunk_size=args.size,
+            chunk_overlap=args.overlap,
+        )
 
     if args.src:
         src = Path(args.src)

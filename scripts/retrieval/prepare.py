@@ -24,9 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
-import chunking  # noqa: E402
-from config import retrieval as cfg  # noqa: E402
-from config import settings  # noqa: E402
+import chunking
+from config import retrieval as cfg
+from config import settings
 
 
 def run(*args):
@@ -59,8 +59,17 @@ def check(build=False):
     ok = True
 
     print("== 지금 설정 ==")
-    for key in ("DOCS", "HOW", "SIZE", "OVERLAP", "EMBED", "RERANK", "STORE",
-                "POOL", "TOP_K"):
+    for key in (
+        "DOCS",
+        "HOW",
+        "SIZE",
+        "OVERLAP",
+        "EMBED",
+        "RERANK",
+        "STORE",
+        "POOL",
+        "TOP_K",
+    ):
         print(f"  {key:<9} {getattr(cfg, key)}")
     print(f"  청크      {chunks}")
     print(f"  인덱스     {index}")
@@ -74,20 +83,49 @@ def check(build=False):
     print("    O")
 
     # 2. 청크
-    path = settings.CHUNKS / f"chunks_{chunks}.jsonl"
+    path = settings.CHUNKS / f"{chunks}.jsonl"
     print(f"\n[2] 청크  {path.name}")
     if path.exists():
         print(f"    O  {sum(1 for _ in open(path)):,}개")
+    elif cfg.CHUNKS and build:
+        # 전처리팀 파이프라인을 그대로 돌린다. `chunking.py` 로 만들면 이름만
+        # 비슷하고 표 원자성도 검색용/생성용 두 벌도 없는 다른 물건이 나온다.
+        #
+        # 전처리본과 청크를 **한 번에** 만든다. 원본 문서를 다 다시 읽으므로
+        # 100건에 몇 분 걸린다 — 새 공고를 받은 뒤에만 부를 것.
+        print("    X 없습니다. 전처리 파이프라인을 돌립니다 (원본 전체를 다시 읽습니다)")
+        from preprocessing.rfp import run_pipeline
+
+        run_pipeline(
+            raw_path=settings.RAW,
+            eda_output_path=settings.PROCESSED,
+            prep_output_path=settings.OUTPUTS,
+            metadata_path=settings.META_CSV,
+            enable_chunk_output=True,
+        )
+        ok = path.exists() and ok
+        if not path.exists():
+            print(f"    X 파이프라인이 돌았는데도 {path.name} 이 없습니다")
+            return False
+        print(f"    O  {sum(1 for _ in open(path)):,}개")
     elif cfg.CHUNKS:
-        # 전처리팀이 잘라 준 청크다. chunking.py 로 만들면 이름만 비슷하고
-        # 표 원자성도 검색용 길이 기준도 없는 다른 물건이 나온다. 그리고
-        # 이름이 달라서 이 검사는 그대로 실패한다 — 시간만 버린다.
-        print("    X 없습니다. 전처리팀 산출물이라 여기서는 못 만듭니다")
-        print(f"      python scripts/retrieval/ingest.py --docs {cfg.DOCS}")
+        print("    X 없습니다 (--build 로 전처리부터 돌립니다)")
         return False
     elif build:
-        ok = run("src/chunking.py", "--docs", cfg.DOCS, "--how", cfg.HOW,
-                 "--size", cfg.SIZE, "--overlap", cfg.OVERLAP) and ok
+        ok = (
+            run(
+                "src/chunking.py",
+                "--docs",
+                cfg.DOCS,
+                "--how",
+                cfg.HOW,
+                "--size",
+                cfg.SIZE,
+                "--overlap",
+                cfg.OVERLAP,
+            )
+            and ok
+        )
     else:
         print("    X 없습니다 (--build 로 만듭니다)")
         ok = False
@@ -102,8 +140,11 @@ def check(build=False):
     # 이름(index)은 양쪽이 같고 폴더만 다르다.
     lance = cfg.STORE == "lance"
     print(f"\n[3] 인덱스  {index}  ({'lancedb' if lance else 'faiss'})")
-    meta = (settings.LANCEDB / f"{index}.json") if lance else (
-        settings.VECTORSTORE / index / "meta.json")
+    meta = (
+        (settings.LANCEDB / f"{index}.json")
+        if lance
+        else (settings.VECTORSTORE / index / "meta.json")
+    )
     stale = False
     if meta.exists():
         was = json.loads(meta.read_text())
@@ -117,10 +158,13 @@ def check(build=False):
             print("    ? 청크 지문이 없는 옛 인덱스입니다. 다시 만드는 게 안전합니다")
             stale = True
         elif was["signature"] != now:
-            print(f"    X 이 청크로 만든 게 아닙니다 (만들 때 {was['signature']} / 지금 {now})")
+            print(
+                f"    X 이 청크로 만든 게 아닙니다 (만들 때 {was['signature']} / 지금 {now})"
+            )
             stale = True
-    elif (settings.LANCEDB / f"{index}.lance" if lance
-          else settings.VECTORSTORE / index).exists():
+    elif (
+        settings.LANCEDB / f"{index}.lance" if lance else settings.VECTORSTORE / index
+    ).exists():
         print("    ? 도장이 없는 옛 인덱스입니다. 다시 만드는 게 안전합니다")
         stale = True
     else:
@@ -140,8 +184,16 @@ def check(build=False):
     if not (settings.DATA / f"{stem}.json").exists():
         print("    X 없습니다")
         if build:
-            ok = run("scripts/retrieval/build_evalset.py", "--chunks", chunks,
-                     "--out", f"{stem}.json") and ok
+            ok = (
+                run(
+                    "scripts/retrieval/build_evalset.py",
+                    "--chunks",
+                    chunks,
+                    "--out",
+                    f"{stem}.json",
+                )
+                and ok
+            )
         else:
             ok = False
     elif stamp.exists():
@@ -156,12 +208,16 @@ def check(build=False):
         if now and made.get(chunks) == now:
             print(f"    O  {json.loads(stamp.read_text()).get('문항수')}문항")
         elif now:
-            print(f"    ! 이 청크로 만든 게 아닙니다 (만들 때: {', '.join(made) or '없음'})")
+            print(
+                f"    ! 이 청크로 만든 게 아닙니다 (만들 때: {', '.join(made) or '없음'})"
+            )
             print("      compare_retrieval 이 시작할 때 알아서 다시 만듭니다")
     else:
         print("    ? 도장이 없습니다. 손으로 만든 세트면 정상입니다")
 
-    print("\n" + ("전부 준비됐습니다" if ok else "빠진 게 있습니다 — --build 로 만드세요"))
+    print(
+        "\n" + ("전부 준비됐습니다" if ok else "빠진 게 있습니다 — --build 로 만드세요")
+    )
     return ok
 
 
