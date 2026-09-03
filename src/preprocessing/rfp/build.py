@@ -12,13 +12,68 @@ import pandas as pd
 from config import retrieval as retrieval_settings
 from config import settings as path_settings
 from preprocessing.rfp.chunk import chunk_pairs
-from preprocessing.rfp.common import FIELD_ALIASES, SUPPORTED_EXTENSIONS
+from preprocessing.rfp.common import (
+    FIELD_ALIASES,
+    ORIGINAL_METADATA_COLUMNS,
+    SUPPORTED_EXTENSIONS,
+)
 from preprocessing.rfp.extract import process_document
 from preprocessing.rfp.meta import merge_original_metadata
 
 # ============================================================
 # 18. 전체 파이프라인 실행
 # ============================================================
+
+
+def _cached_rows(docs_path):
+    """지난번 전처리본에서 문서별 행을 되살린다. **전처리본이 곧 추출 캐시다.**
+
+    캐시 파일을 따로 두지 않는다. `cleaned_documents.jsonl` 에 추출 결과가
+    통째로 들어 있고, 파일을 하나 더 만들면 언젠가 둘이 어긋난다.
+
+    CSV 에서 붙은 컬럼은 떼어 낸다. 그대로 두면 병합이 같은 이름으로 한 번 더
+    붙어 `사업명_원본` 같은 컬럼이 생긴다.
+
+    Args:
+        docs_path: 전처리본 jsonl 경로.
+
+    Returns:
+        dict: 파일명 → 추출 결과 행.
+    """
+    drop = set(ORIGINAL_METADATA_COLUMNS) | {"메타매칭방식", "source"}
+    rows = {}
+    with open(docs_path, encoding="utf-8") as f:
+        for line in f:
+            record = json.loads(line)
+            meta = record["metadata"]
+            row = {k: v for k, v in meta.items() if k not in drop}
+            row["파일명"] = meta["source"]
+            row["clean_text"] = record["page_content"]
+            row["clean_text_for_generation"] = record.get(
+                "page_content_for_generation", ""
+            )
+            rows[row["파일명"]] = row
+    return rows
+
+
+def _cache_cutoff(docs_path):
+    """캐시를 믿어도 되는 시각. 이보다 나중에 들어온 원본은 다시 뽑는다.
+
+    전처리본이 만들어진 시각과 이 패키지에서 **가장 나중에 고친 모듈**의
+    시각 중 늦은 쪽이다. 코드를 고쳤는데 옛 추출 결과를 그대로 쓰면
+    고친 게 반영이 안 되고, 그건 원인을 찾기가 아주 어렵다.
+
+    Args:
+        docs_path: 전처리본 jsonl 경로.
+
+    Returns:
+        float | None: 기준 시각. 캐시를 쓸 수 없으면 None.
+    """
+    if not docs_path.exists():
+        return None
+    made = docs_path.stat().st_mtime
+    code = max(p.stat().st_mtime for p in Path(__file__).parent.glob("*.py"))
+    return None if code > made else made
 
 
 def run_pipeline(
@@ -61,9 +116,22 @@ def run_pipeline(
     if sample_size is not None:
         files = files[:sample_size]
 
+    # 추출은 문서당 몇 초다. 하루 수백 건이 쌓이면 전체 재추출은 못 버틴다.
+    # 안 바뀐 파일은 지난번 결과를 그대로 쓴다.
+    docs_path = Path(path_settings.PROCESSED) / f"{retrieval_settings.DOCS}.jsonl"
+    cutoff = _cache_cutoff(docs_path)
+    cached = _cached_rows(docs_path) if cutoff else {}
+
     rows = []
+    reused = 0
 
     for i, path in enumerate(files, start=1):
+        row = cached.get(path.name)
+        if row is not None and path.stat().st_mtime <= cutoff:
+            rows.append(row)
+            reused += 1
+            continue
+
         print(f"[{i}/{len(files)}] {path.name}")
 
         try:
@@ -98,6 +166,8 @@ def run_pipeline(
                 row["clean_text"],
                 encoding="utf-8",
             )
+
+    print(f"추출: 재사용 {reused}건 · 새로 {len(files) - reused}건")
 
     df = pd.DataFrame(rows)
 
