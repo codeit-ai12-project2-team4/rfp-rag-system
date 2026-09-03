@@ -51,7 +51,7 @@ EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 # 이름은 scripts/retrieval/ingest.py 의 target_name() 이 짓는다.
 # 기본값은 DOCS 와 같은 버전으로 맞춰 둔다. 여기가 어긋나면 API 가 옛 코퍼스로
 # 답하는데 아무 오류도 안 난다 — 이 파일 맨 위 목록의 마지막 줄이 그 사고다.
-CHUNKS = os.environ.get("CHUNKS", "cleaned_documents_v8__pipeline_1500_250")
+CHUNKS = os.environ.get("CHUNKS", "chunks_cleaned_documents_v8__pipeline_1500_250")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):

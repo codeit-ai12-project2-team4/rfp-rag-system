@@ -372,7 +372,9 @@ def toc_lines(text, min_refs=1, max_chars=80, many_refs=3):
         # `- 추진개요\t3 - 추진방안\t5 - 추진일정\t7 …`. 길이로만 자르면
         # 이게 전부 본문으로 통과한다. 쪽번호가 여럿 모인 줄은 길어도 목차다.
         refs = len(_PAGE_REF.findall(stripped))
-        numbered = refs >= many_refs or (refs >= min_refs and len(stripped) <= max_chars)
+        numbered = refs >= many_refs or (
+            refs >= min_refs and len(stripped) <= max_chars
+        )
         sectioned = len(_SECTION_RUN.findall(stripped)) >= 3
         out.append(dotted or numbered or sectioned)
     return out
@@ -393,8 +395,14 @@ def toc_ish(text, min_refs=4):
         return True  # 점선 안내선은 그것만으로 충분하다
     if any(len(_SECTION_RUN.findall(line)) >= 3 for line in lines):
         return True  # 절 표시가 한 줄에 셋 이상이면 목차다
-    return sum(len(_PAGE_REF.findall(line))
-               for line, f in zip(lines, flags, strict=False) if f) >= min_refs
+    return (
+        sum(
+            len(_PAGE_REF.findall(line))
+            for line, f in zip(lines, flags, strict=False)
+            if f
+        )
+        >= min_refs
+    )
 
 
 def drop_toc_chunks(chunks, min_leaders=5, min_chars=80, verbose=False):
@@ -463,13 +471,13 @@ def save_chunks(chunks, name):
 
     Args:
         chunks: 저장할 Document 리스트.
-        name: 설정 이름. 파일은 `outputs/chunks/chunks_{name}.jsonl` 이 된다.
+        name: 설정 이름. 파일은 `outputs/chunks/{name}.jsonl` 이 된다.
 
     Returns:
         저장한 파일 경로.
     """
     settings.make_dirs()
-    path = settings.CHUNKS / f"chunks_{name}.jsonl"
+    path = settings.CHUNKS / f"{name}.jsonl"
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(
             json.dumps(
@@ -494,9 +502,12 @@ def load_chunks(name):
     Raises:
         FileNotFoundError: 그 이름으로 저장된 청크가 없을 때.
     """
-    path = settings.CHUNKS / f"chunks_{name}.jsonl"
+    path = settings.CHUNKS / f"{name}.jsonl"
     with open(path, encoding="utf-8") as f:
-        return [_row_to_document(row) for row in (json.loads(line) for line in f if line.strip())]
+        return [
+            _row_to_document(row)
+            for row in (json.loads(line) for line in f if line.strip())
+        ]
 
 
 def _row_to_document(row):
@@ -563,7 +574,7 @@ def chunk_stats(chunks):
 def main():
     """명령줄에서 청크 파일을 만든다.
 
-    `outputs/chunks/chunks_{이름}.jsonl` 을 만들고 길이 분포를 찍는다.
+    `outputs/chunks/{이름}.jsonl` 을 만들고 길이 분포를 찍는다.
     이름에 전처리본과 자르기 설정이 다 들어가므로, 어떤 설정으로 만든
     청크인지 파일 이름만 봐도 알 수 있다.
     """

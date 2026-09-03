@@ -44,10 +44,17 @@ def main():
     """크기별로 돌리고 결과를 합쳐 표로 찍는다."""
     parser = argparse.ArgumentParser(description="청크 크기를 스윕한다.")
     parser.add_argument("--docs", default="cleaned_documents_v3")
-    parser.add_argument("--sizes", default="900,1200,1800,2400",
-                        type=lambda s: [int(x) for x in s.split(",")])
-    parser.add_argument("--overlap-ratio", type=float, default=1 / 6,
-                        help="겹침 = 크기 × 이 값 (1200/200 이 1/6 이다)")
+    parser.add_argument(
+        "--sizes",
+        default="900,1200,1800,2400",
+        type=lambda s: [int(x) for x in s.split(",")],
+    )
+    parser.add_argument(
+        "--overlap-ratio",
+        type=float,
+        default=1 / 6,
+        help="겹침 = 크기 × 이 값 (1200/200 이 1/6 이다)",
+    )
     parser.add_argument("--evalset", default="eval_qa_80")
     parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
@@ -66,28 +73,65 @@ def main():
         print(f"\n{'=' * 60}\n[{size}/{overlap}]")
         started = time.time()
 
-        if args.force or not (settings.CHUNKS / f"chunks_{name}.jsonl").exists():
-            if not run([sys.executable, "src/chunking.py", "--docs", args.docs,
-                        "--how", "recursive", "--size", size, "--overlap", overlap],
-                       "청킹"):
+        if args.force or not (settings.CHUNKS / f"{name}.jsonl").exists():
+            if not run(
+                [
+                    sys.executable,
+                    "src/chunking.py",
+                    "--docs",
+                    args.docs,
+                    "--how",
+                    "recursive",
+                    "--size",
+                    size,
+                    "--overlap",
+                    overlap,
+                ],
+                "청킹",
+            ):
                 continue
 
         ok = True
         for suffix in ("", "__header"):
             if args.force or f"{name}{suffix}__{args.embed}" not in list_stores():
-                ok = run([sys.executable, "src/vectorstore.py",
-                          "--chunks", f"{name}{suffix}", "--embed", args.embed]
-                         + (["--force"] if args.force else []), "인덱싱")
+                ok = run(
+                    [
+                        sys.executable,
+                        "src/vectorstore.py",
+                        "--chunks",
+                        f"{name}{suffix}",
+                        "--embed",
+                        args.embed,
+                    ]
+                    + (["--force"] if args.force else []),
+                    "인덱싱",
+                )
                 if not ok:
                     break
         if not ok:
             continue
 
         out = settings.EVAL_RESULTS / f"chunk_{size}_{overlap}.csv"
-        if not run([sys.executable, HERE / "compare_retrieval.py",
-                    "--chunks", name, "--evalset", args.evalset, "--scoped",
-                    "--embed", args.embed, "--rerank", args.rerank,
-                    "--bm25-weights", "0.5", "--out", out], "측정"):
+        if not run(
+            [
+                sys.executable,
+                HERE / "compare_retrieval.py",
+                "--chunks",
+                name,
+                "--evalset",
+                args.evalset,
+                "--scoped",
+                "--embed",
+                args.embed,
+                "--rerank",
+                args.rerank,
+                "--bm25-weights",
+                "0.5",
+                "--out",
+                out,
+            ],
+            "측정",
+        ):
             continue
 
         frame = pd.read_csv(out, encoding="utf-8-sig")
