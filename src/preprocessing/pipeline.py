@@ -1298,7 +1298,12 @@ PATTERN_TABLE_BLANK_RUN = re.compile(r"\n{3,}")
 PATTERN_TABLE_CELL_SPLIT = re.compile(
     r"(?<!\\)\|"
 )  # 이스케이프 안 된 |만 셀 구분자로 인식
-PATTERN_ROW_BLOCK_LINE = re.compile(r"^\[행 \d+\]\s*")  # _render_row_block 결과 줄
+PATTERN_ROW_BLOCK_LINE = re.compile(
+    r"\[행 \d+\]\s*"
+)  # _render_row_block 결과 태그. ^ 없음: 줄 중간에도 나타날 수 있어 .search()/.sub()로 찾는다. .match() 사용처는 항상 위치 0에서만 보므로 영향 없다.
+# 앞이 숫자가 아니거나(헤더-값 구분자) 뒤가 숫자가 아닌 콜론만 고른다.
+# 15:00 처럼 양쪽이 숫자인 것만 살아남는다.
+PATTERN_HEADER_COLON = re.compile(r"(?<!\d):|:(?!\d)")
 
 
 def _split_table_row(line: str) -> list[str]:
@@ -1428,12 +1433,14 @@ def strip_table_markup(text: str) -> str:
 
         _flush_table_buffer()
 
-        row_block_match = PATTERN_ROW_BLOCK_LINE.match(line)
-        if row_block_match:
-            # "[행 N] 헤더1: 값1 헤더2: 값2" -> "헤더1 값1 헤더2 값2"
-            # 태그와 콜론만 걷어내고, 헤더-값이 같은 줄에 있다는 결합
-            # 정보는 그대로 유지한다.
-            content = line[row_block_match.end() :].replace(":", "")
+        if PATTERN_ROW_BLOCK_LINE.search(line):
+            # "...[행 N] 헤더1: 값1 [행 M] 헤더2: 값2..." -> "...헤더1 값1 헤더2 값2..."
+            # 태그가 줄 시작이 아니라 중간에도 나타날 수 있어(배점 산식
+            # 문장 등에 섞여 들어간 사례) sub으로 위치 상관없이 전부
+            # 걷어낸다. 헤더-값 구분 콜론도 같이 걷어내되, 앞뒤가 모두
+            # 숫자인 콜론(15:00, 13:30 …)은 시각이므로 남긴다.
+            content = PATTERN_ROW_BLOCK_LINE.sub("", line)
+            content = PATTERN_HEADER_COLON.sub("", content)
             content = re.sub(r"[ \t]{2,}", " ", content).strip()
             output_lines.append(content)
             continue
@@ -2072,6 +2079,187 @@ def chunk_text(text: str, chunk_size: int = 800, chunk_overlap: int = 120) -> li
     return overlapped
 
 
+def _split_segments(text: str) -> list:
+    """표 블록과 일반 텍스트로 나눈다. 표는 쪼개지 않을 한 덩어리다.
+
+    strip_table_markup()이 쓰는 것과 같은 정규식으로 표 줄을 찾으므로,
+    "무엇이 표인가"의 기준이 두 함수 사이에서 어긋나지 않는다.
+
+    Args:
+        text: 생성(LLM)용 텍스트.
+
+    Returns:
+        list[tuple[str, bool]]: (덩어리, 표인가) 목록. 원문 순서를 지킨다.
+    """
+
+    segments, buffer, in_table = [], [], False
+
+    for line in text.split("\n"):
+        is_table = bool(
+            PATTERN_TABLE_ROW.match(line) or PATTERN_ROW_BLOCK_LINE.search(line)
+        )
+        if buffer and is_table != in_table:
+            segments.append(("\n".join(buffer), in_table))
+            buffer = []
+        in_table = is_table
+        buffer.append(line)
+
+    if buffer:
+        segments.append(("\n".join(buffer), in_table))
+
+    return segments
+
+
+def _trailing_overlap(chunk_pieces: list, chunk_overlap: int) -> str:
+    """청크의 마지막 조각에서 overlap용 꼬리 텍스트를 뽑는다.
+
+    [표 원자성 보호] 표 조각은 헤더 행이 있어야 `_flatten_table_block`이
+    올바르게 파싱한다. overlap이 표 조각 중간을 문자 단위로 잘라 다음
+    청크 앞에 붙이면, 헤더 없는 데이터 행이 뒤섞여 들어가고
+    `_flatten_table_block`이 그 중 첫 데이터 행을 헤더로 오인해 나머지
+    행에 반복 결합시킨다(예: "행24 행25 내용24 내용25" 형태로 깨짐).
+    그래서 마지막 조각이 표면 overlap을 생략한다 — 일반 텍스트 조각만
+    문자 단위로 안전하게 잘라 이어붙인다.
+
+    Args:
+        chunk_pieces: 해당 청크를 구성한 (조각 텍스트, 표 여부) 목록.
+        chunk_overlap: 가져올 최대 길이.
+
+    Returns:
+        str: overlap로 앞에 붙일 텍스트. 표로 끝난 청크면 빈 문자열.
+    """
+
+    if not chunk_pieces:
+        return ""
+
+    last_text, last_is_table = chunk_pieces[-1]
+    if last_is_table:
+        return ""
+
+    return last_text[-chunk_overlap:] if len(last_text) > chunk_overlap else last_text
+
+
+# 표 크기가 chunk_size의 이 배수를 넘으면 행 단위로 쪼갠다.
+TABLE_SPLIT_MULTIPLIER = 3
+
+
+def _split_oversized_table(table_text: str, chunk_size: int) -> list:
+    """표 하나가 chunk_size의 TABLE_SPLIT_MULTIPLIER배를 넘으면 행 단위로
+    쪼갠다. 넘지 않으면 원문을 그대로 담은 1개짜리 리스트를 돌려준다
+    (기존 표 원자성 동작 유지).
+
+    [배경] `_flatten_table_block`이 병합 표를 행마다 "헤더: 값"으로
+    풀어 쓰기 때문에, 행이 아주 많은 서식표 하나가 chunk_size의 수십
+    배까지 부풀 수 있다(실측 29,913자). 그런 청크가 검색에 뽑히면
+    컨텍스트 예산 안에서 근거가 그 표 하나로 독점된다.
+
+    마크다운 파이프 표(헤더행+구분행+데이터행)는 앞 두 줄(헤더, 구분행)을
+    조각마다 복제해 `_flatten_table_block`이 계속 올바르게 파싱하게
+    한다. "[행 N] 헤더: 값" 행블록 표는 이미 행마다 헤더가 박혀있어
+    복제 없이 줄 단위로만 나누면 된다.
+
+    Args:
+        table_text: 표 원문(생성용, `_split_segments`가 뽑은 원자적 조각).
+        chunk_size: 기준 청크 크기(검색용 문자 수).
+
+    Returns:
+        list[str]: 나눠진 표 조각들. 임계값 이하면 [table_text].
+    """
+
+    if len(strip_table_markup(table_text)) <= chunk_size * TABLE_SPLIT_MULTIPLIER:
+        return [table_text]
+
+    lines = table_text.split("\n")
+    is_row_block = bool(lines) and bool(PATTERN_ROW_BLOCK_LINE.search(lines[0]))
+    header_lines = [] if is_row_block else lines[:2]
+    data_lines = lines if is_row_block else lines[2:]
+
+    groups, buffer_lines = [], list(header_lines)
+
+    for line in data_lines:
+        candidate_lines = buffer_lines + [line]
+        has_data = len(buffer_lines) > len(header_lines)
+        if (
+            has_data
+            and len(strip_table_markup("\n".join(candidate_lines))) > chunk_size
+        ):
+            groups.append("\n".join(buffer_lines))
+            buffer_lines = header_lines + [line]
+        else:
+            buffer_lines = candidate_lines
+
+    if len(buffer_lines) > len(header_lines):
+        groups.append("\n".join(buffer_lines))
+
+    return groups if groups else [table_text]
+
+
+def chunk_pairs(text: str, chunk_size: int = 1500, chunk_overlap: int = 250) -> list:
+    """생성용 텍스트를 잘라 (검색용, 생성용) 청크 쌍을 만든다.
+
+    자르는 대상은 생성용이지만 **길이는 검색용 기준으로 잰다.** 검색팀의
+    chunk_size는 검색용 텍스트로 격자 실험을 해서 고른 값이라, 마크업
+    몫만큼 짧아지면 그 실험이 무의미해진다.
+
+    표 블록은 통째로 한 청크에 들어간다. 표 하나가 chunk_size보다 크면
+    그 표만 단독으로 더 큰 청크가 된다(쪼개서 헤더와 값이 갈리는 것보다
+    낫다는 판단) — 단, chunk_size의 TABLE_SPLIT_MULTIPLIER배를 넘는
+    극단적인 경우는 `_split_oversized_table`이 행 단위로 쪼갠다(마크다운
+    표는 헤더/구분행을 조각마다 복제). 같은 이유로 overlap도 조각(piece)
+    단위로 계산해 표 조각 중간을 자르지 않는다(`_trailing_overlap` 참고).
+
+    Args:
+        text: 생성(LLM)용 텍스트.
+        chunk_size: 청크 최대 길이. **검색용 기준 문자 수.**
+        chunk_overlap: 인접 청크 간 겹치는 길이.
+
+    Returns:
+        list[tuple[str, str]]: (검색용, 생성용) 쌍 목록.
+    """
+
+    if not text:
+        return []
+
+    pieces = []
+    for segment, is_table in _split_segments(text):
+        if is_table:
+            pieces.extend(
+                (piece, True) for piece in _split_oversized_table(segment, chunk_size)
+            )
+        else:
+            pieces.extend(
+                (p, False) for p in chunk_text(segment, chunk_size, chunk_overlap=0)
+            )
+
+    chunk_piece_lists, buffer_pieces, buffer_text = [], [], ""
+
+    for piece, is_table in pieces:
+        candidate = f"{buffer_text}\n{piece}" if buffer_text else piece
+        if buffer_text and len(strip_table_markup(candidate)) > chunk_size:
+            chunk_piece_lists.append(buffer_pieces)
+            buffer_pieces, buffer_text = [(piece, is_table)], piece
+        else:
+            buffer_pieces.append((piece, is_table))
+            buffer_text = candidate
+
+    if buffer_pieces:
+        chunk_piece_lists.append(buffer_pieces)
+
+    chunks = [
+        "\n".join(piece for piece, _ in chunk_pieces)
+        for chunk_pieces in chunk_piece_lists
+    ]
+
+    if chunk_overlap > 0 and len(chunks) > 1:
+        overlapped = [chunks[0]]
+        for prev_pieces, chunk in zip(chunk_piece_lists, chunks[1:]):
+            carry = _trailing_overlap(prev_pieces, chunk_overlap)
+            overlapped.append(f"{carry}\n{chunk}" if carry else chunk)
+        chunks = overlapped
+
+    return [(strip_table_markup(chunk), chunk) for chunk in chunks]
+
+
 def write_jsonl(
     df: pd.DataFrame,
     path: Path,
@@ -2123,30 +2311,26 @@ def write_jsonl(
 
     with open(chunk_output_path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
-            # [표현 이원화 + 청킹 정합성] 구조가 살아있는 생성용 텍스트를
-            # 먼저 청크로 자르고, 검색/임베딩용은 "같은 청크"에 strip_table_
-            # markup을 적용해서 파생시킨다. 두 텍스트를 따로따로 청킹하면
-            # 표 마크업 유무로 길이가 달라져 청크 경계가 어긋날 수 있는데,
-            # 이 순서(생성용 청킹 -> 임베딩용은 그 청크에서 파생)를 쓰면
-            # chunk_index가 항상 같은 내용을 가리키는 게 구조적으로 보장된다.
+            # [청킹 정합성] chunk_pairs()가 한 번만 자르고 두 판본을 함께
+            # 돌려주므로 chunk_index가 늘 같은 구간을 가리킨다. 길이는
+            # 검색용 기준으로 재고, 표는 중간에서 안 잘린다.
             generation_source = (
                 row.get("clean_text_for_generation") or row["clean_text"] or ""
             )
-            generation_chunks = chunk_text(
+            pairs = chunk_pairs(
                 generation_source,
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
             )
 
-            for i, gen_chunk in enumerate(generation_chunks):
-                embedding_chunk = strip_table_markup(gen_chunk)
+            for i, (embedding_chunk, gen_chunk) in enumerate(pairs):
                 record = {
                     "page_content": embedding_chunk,  # 검색/임베딩용
                     "page_content_for_generation": gen_chunk,  # 생성/LLM 컨텍스트용
                     "metadata": {
                         "source": row["파일명"],
                         "chunk_index": i,
-                        "chunk_total": len(generation_chunks),
+                        "chunk_total": len(pairs),
                         **{col: row[col] for col in metadata_columns},
                     },
                 }
@@ -2203,7 +2387,7 @@ def _build_report(df: pd.DataFrame) -> dict:
 # ============================================================
 
 if __name__ == "__main__":
-    DATA_DIR = Path("/home/spai1216/workspace/data/files")
+    DATA_DIR = Path("여기에 원본 파일 경로")
     OUTPUT_DIR = Path("./output")
     ORIGINAL_METADATA_CSV = Path("./original_metadata.csv")  # 처음 받은 CSV 경로로 수정
 
@@ -2212,3 +2396,23 @@ if __name__ == "__main__":
         OUTPUT_DIR,
         original_metadata_csv=ORIGINAL_METADATA_CSV,
     )
+
+
+# ============================================================
+# 19. 청킹 데이터 파일 뽑기
+# ============================================================
+df = pd.read_csv("")
+
+DOC_PATH = Path(
+    r"C:\Users\asd\Desktop\중급 프젝\v2_chosim\rfp-rag-system\src\preprocessing\output\cleaned_documents.jsonl"
+)
+DOC_PATH.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
+
+write_jsonl(
+    df,
+    DOC_PATH,
+    enable_chunk_output=True,
+    chunk_output_path=DOC_PATH.with_name("cleaned_documents_v7__chunks_1500_250.jsonl"),
+    chunk_size=1500,
+    chunk_overlap=250,
+)
