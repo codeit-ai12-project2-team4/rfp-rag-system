@@ -103,6 +103,8 @@ class Eval(BaseModel):
     judge_model: str = "nano"
     limit: int | None = None
     generation: bool = True
+    # False 면 공고를 안 알려주고 검색부터 — 전 구간 E2E
+    scoped: bool = True
 
 
 class Ask(BaseModel):

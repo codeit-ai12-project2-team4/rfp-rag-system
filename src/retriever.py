@@ -626,17 +626,28 @@ def preview(text, query, width=220):
     return flat[:width]
 
 
-def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwargs):
+def export_contexts(evalset, out_path, generation=False, on_progress=None,
+                    scoped=True, **kwargs):
     """평가 질문마다 발췌를 뽑아 파일로 저장한다.
 
     **generation 파트가 검색을 안 돌려도 되게 하려는 것이다.** 브랜치를 가져갈
     필요도, TEI 를 띄울 필요도 없다. jsonl 한 줄이 `generate_answer()` 한 번에
     그대로 들어간다.
 
-    **scoped 다.** 문항에 `doc_id` 가 있으면 그 공고 안에서만 발췌를 찾는다.
-    즉 1단계(어떤 공고를 볼지 고르기)를 **건너뛴다.** 이걸로 낸 숫자는
-    "공고가 정해진 뒤의 E2E" 이지 전 구간이 아니다. 전 구간은 1단계 Top10 을
-    곱해야 한다 — 발표에 그냥 "E2E" 라고 쓰면 실제보다 후하다.
+    **`scoped` 가 무엇을 재는지 가른다.**
+
+        scoped=True   문항의 `doc_id` 로 공고를 고정하고 그 안에서만 찾는다.
+                      1단계를 건너뛴다. "공고가 정해진 뒤의 E2E" 다.
+        scoped=False  질문만 주고 검색부터 시킨다. **전 구간이다.**
+                      실제 사용자 흐름과 같다.
+
+    `scoped=True` 로 낸 숫자를 그냥 "E2E" 라고 쓰면 실제보다 후하다 — 1단계
+    Top10 을 곱해야 전 구간이 된다. `scoped=False` 는 그 곱을 직접 잰다.
+
+    `scoped=False` 일 때는 각 줄에 `found_doc` 을 적는다. 정답 공고의 청크가
+    발췌에 하나라도 들었는가다. **틀린 답이 "공고를 못 찾아서" 인지 "찾았는데
+    못 읽어서" 인지 이걸로 갈린다.** 없으면 전 구간 숫자만 보고 어디를 고쳐야
+    할지 알 수 없다.
 
     Args:
         evalset: `data/` 의 평가 세트 이름.
@@ -661,7 +672,8 @@ def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwa
     empty = 0  # 발췌가 하나도 안 잡힌 문항. doc_id 가 코퍼스와 다르면 전부 여기로 온다
     with open(out_path, "w", encoding="utf-8") as f:
         for i, pair in enumerate(pairs, 1):
-            doc_ids = [pair["doc_id"]] if pair.get("doc_id") else None
+            gold = pair.get("doc_id")
+            doc_ids = [gold] if (scoped and gold) else None
             chunks = fit_context(
                 retrieve(pair["question"], doc_ids=doc_ids, **kwargs), generation=generation
             )
@@ -674,6 +686,11 @@ def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwa
                         "type": pair.get("type"),
                         "answerable": pair.get("answerable", True),
                         "doc_ids": doc_ids,
+                        "gold_doc": gold,
+                        # scoped 면 늘 True 라 뜻이 없다. unscoped 에서만 적는다.
+                        "found_doc": None if scoped else any(
+                            c.metadata.get("doc_id") == gold for c in chunks
+                        ),
                         "keywords": pair.get("keywords"),  # 검색 정답. 채점 참고용
                         "context": context,
                         "sources": sources(chunks),
@@ -692,6 +709,8 @@ def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwa
 
     print(" " * 30, end="\r")
     print(f"질문 {len(pairs)}개 · {time.time() - started:.0f}초 → {out_path}")
+    if not scoped:
+        print(f"※ unscoped — 1단계부터 잽니다. 전 구간 숫자입니다")
     if empty:
         # 빈 발췌로 답변을 만들면 모델은 "확인되지 않습니다" 밖에 못 낸다.
         # 채점은 그걸 물러섬 1.0 · 충실성 0.0 으로 적는다 — 성능처럼 보이지만
@@ -715,6 +734,11 @@ def main():
         help="평가 질문 전체의 발췌를 파일로 뽑는다 (generation 전달용)",
     )
     parser.add_argument("--evalset", default="eval_qa", help="data/ 의 평가 세트 이름")
+    parser.add_argument(
+        "--unscoped",
+        action="store_true",
+        help="공고를 안 알려주고 검색부터 시킨다 (전 구간 E2E). 기본은 scoped",
+    )
     parser.add_argument("--out", help="--export 저장 경로")
     parser.add_argument(
         "--notices",
@@ -753,6 +777,7 @@ def main():
             args.evalset,
             out,
             generation=args.generation,
+            scoped=not args.unscoped,
             top_k=args.top_k,
             index=args.index,
             chunks=args.chunks,

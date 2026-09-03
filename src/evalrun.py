@@ -184,7 +184,7 @@ def normalize(rows):
 
 
 def start(evalset, model="mini", judge=True, judge_model="nano", limit=None,
-          generation=True):
+          generation=True, scoped=True):
     """작업을 만들고 스레드에서 돌린다. 바로 작업번호를 돌려준다.
 
     Args:
@@ -194,6 +194,8 @@ def start(evalset, model="mini", judge=True, judge_model="nano", limit=None,
         judge_model: 채점 모델 키.
         limit: 앞에서 몇 문항만. 연습용.
         generation: 생성용 본문을 쓸지 (9/8 결정은 True).
+        scoped: True 면 정답 공고를 알려주고 그 안에서만 찾는다(2·3단계).
+            False 면 검색부터 시킨다 — **전 구간 E2E** 다.
 
     Returns:
         str: 작업번호.
@@ -210,6 +212,7 @@ def start(evalset, model="mini", judge=True, judge_model="nano", limit=None,
         "options": {
             "evalset": evalset, "model": model, "judge": judge,
             "judge_model": judge_model, "limit": limit, "generation": generation,
+            "scoped": scoped,
         },
         "files": {
             "contexts": f"contexts_eval_{job_id}.jsonl",
@@ -280,6 +283,7 @@ def _run(job):
         export_contexts(
             options["evalset"], contexts,
             generation=options["generation"], on_progress=progress,
+            scoped=options.get("scoped", True),
         )
         _log(job, f"발췌 {job['total']}문항 완료")
 

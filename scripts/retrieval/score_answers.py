@@ -118,6 +118,16 @@ def main():
             if judged < len(rows):
                 print(f"  ⚠ 판정불가 {len(rows) - judged}개 — 빈 응답이면 토큰 예산을 의심한다")
 
+        # 전 구간(unscoped)으로 뽑은 발췌면 `found_doc` 이 붙어 있다.
+        # **틀린 답을 두 갈래로 나눈다** — 공고를 못 찾았나, 찾았는데 못 읽었나.
+        # 이걸 안 나누면 전 구간 숫자만 보고 어디를 고쳐야 할지 알 수 없다.
+        found = [r.get("found_doc") for r in rows if r.get("found_doc") is not None]
+        if found:
+            hit = sum(1 for f in found if f)
+            print(f"\n[{Path(path).stem}] 전 구간 · 정답 공고를 발췌에 담은 문항 "
+                  f"{hit}/{len(found)} ({hit / len(found):.0%})")
+            print("  나머지는 1단계에서 놓친 것이다. 생성이 아니라 검색을 고쳐야 한다.")
+
         if args.misses:
             backed = [(r, s) for r, s in zip(rows, scored) if s["물러섬"]]
             print(f"\n[{Path(path).stem}] 물러선 문항 {len(backed)}/{len(rows)}개")
