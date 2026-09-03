@@ -466,7 +466,7 @@ def sources(chunks):
         chunks: `build_context()` 에 넣은 것과 **같은** 청크 리스트.
 
     Returns:
-        `[{"n", "doc_id", "title", "agency", "chunk_id"}]`. 번호는 1부터.
+        `[{"n", "doc_id", "title", "agency", "chunk_id", "excerpt"}]`. 번호는 1부터.
     """
     return [
         _drop_nan(
@@ -476,6 +476,13 @@ def sources(chunks):
                 "title": chunk.metadata.get("title"),
                 "agency": chunk.metadata.get("agency"),
                 "chunk_id": chunk.metadata.get("chunk_id"),
+                # **근거로 쓴 원문.** 이게 없으면 화면이 제목만 보여주게 되고,
+                # 그러면 "이 답이 어디서 나왔나" 를 확인할 방법이 사라진다.
+                # 이 제품에서 그건 기능 하나가 아니라 존재 이유다.
+                #
+                # 검색용 본문을 준다. 모델이 읽은 건 생성용(표 구조 유지)이지만
+                # 내용은 같고 표 마크업이 없어 사람이 읽기 좋다.
+                "excerpt": " ".join(chunk.page_content.split())[:400],
             }
         )
         for i, chunk in enumerate(chunks, 1)

@@ -16,6 +16,12 @@ Description=bidmate RFP API (FastAPI :8010)
 After=network-online.target docker.service
 Wants=network-online.target docker.service
 
+# 재시작 횟수 제한을 끈다. **[Service] 가 아니라 여기가 제자리다** —
+# [Service] 에 두면 systemd 가 "Unknown key name" 으로 무시한다.
+# OOM 으로 반복해서 죽으면 원인은 호스트 RAM 이다(VM 16GB). journalctl 에
+# oom-kill 이 보이면 재시작 횟수를 늘릴 게 아니라 POOL·청크 수를 줄인다.
+StartLimitIntervalSec=0
+
 [Service]
 User=spai1203
 WorkingDirectory=/home/spai1203/rfp-rag-system
@@ -28,11 +34,6 @@ Restart=always
 RestartSec=10
 # 기동에 BM25 색인 짓느라 시간이 걸린다. 그 사이 죽은 걸로 안 보게.
 TimeoutStartSec=180
-
-# OOM 으로 죽어도 다시 올린다. 다만 **반복해서 죽으면 원인이 메모리다** —
-# TEI·SGLang 은 GPU 를 쓰지만 이 프로세스는 호스트 RAM 을 쓰고 VM 은 16GB 다.
-# journalctl 에 oom-kill 이 보이면 POOL 이나 청크 수를 줄이는 게 먼저다.
-StartLimitIntervalSec=0
 
 StandardOutput=journal
 StandardError=journal
