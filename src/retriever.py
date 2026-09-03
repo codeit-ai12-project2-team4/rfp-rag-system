@@ -564,7 +564,7 @@ def preview(text, query, width=220):
     return flat[:width]
 
 
-def export_contexts(evalset, out_path, generation=False, **kwargs):
+def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwargs):
     """평가 질문마다 발췌를 뽑아 파일로 저장한다.
 
     **generation 파트가 검색을 안 돌려도 되게 하려는 것이다.** 브랜치를 가져갈
@@ -574,6 +574,8 @@ def export_contexts(evalset, out_path, generation=False, **kwargs):
     Args:
         evalset: `data/` 의 평가 세트 이름.
         out_path: 저장 경로.
+        on_progress: `(끝난 개수, 전체)` 로 부른다. UI 가 진행률을 보여줄 때 쓴다.
+            `\r` 로 덮어쓰는 화면 출력은 파일 로그에서 한 줄로 뭉개진다.
         **kwargs: `retrieve()` 인자 (index, embed, rerank, top_k …).
 
     Returns:
@@ -615,6 +617,8 @@ def export_contexts(evalset, out_path, generation=False, **kwargs):
                 + "\n"
             )
             print(f"  {i}/{len(pairs)}", end="\r")
+            if on_progress:
+                on_progress(i, len(pairs))
 
     print(" " * 30, end="\r")
     print(f"질문 {len(pairs)}개 · {time.time() - started:.0f}초 → {out_path}")
