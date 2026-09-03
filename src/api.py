@@ -22,12 +22,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
-from fastapi import FastAPI, HTTPException
+import hmac
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from config import MODEL_CONFIGS
+from config import MODEL_CONFIGS, settings
+import evalrun
+from evaluation import load_evalset
 from generation import generate_answer
 from retriever import (
     build_context,
@@ -46,12 +51,48 @@ app.add_middleware(
 )
 
 
+# 포트 8010 은 외부에 열려 있다. 원본 RFP 는 NDA 이고, `POST /eval` 은 누르면
+# OpenAI 요금이 나간다. 토큰 하나로 막는다.
+#
+# **브라우저가 이 토큰을 들고 다니면 안 된다.** 그러면 번들에 박혀 공개된다.
+# UI 쪽은 Next 의 라우트 핸들러(`app/api/[...path]/route.ts`)가 **서버에서**
+# 붙인다. 그래서 `next.config.ts` 의 rewrite 를 걷어냈다 — rewrite 는 요청을
+# 그대로 넘기기만 해서 헤더를 붙일 자리가 없다.
+API_TOKEN = os.environ.get("API_TOKEN", "")
+OPEN_PATHS = {"/health"}  # 감시용. 여기엔 데이터가 없다
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    """토큰이 맞아야 통과. `API_TOKEN` 이 비어 있으면 검사하지 않는다.
+
+    비어 있을 때 막지 않는 이유는, 막으면 토큰을 넣기 전에 배포한 순간
+    화면이 통째로 죽기 때문이다. 대신 뜰 때 경고하고 `/health` 에
+    `auth: false` 로 드러낸다 — 조용히 열려 있는 것보다 낫다.
+    """
+    if API_TOKEN and request.url.path not in OPEN_PATHS:
+        sent = request.headers.get("x-api-token", "")
+        # 글자 수로 새는 것까지 막는다. 짧은 코드에 비용이 없다.
+        if not hmac.compare_digest(sent, API_TOKEN):
+            return JSONResponse({"detail": "토큰이 없거나 틀립니다"}, status_code=401)
+    return await call_next(request)
+
+
 class Search(BaseModel):
     query: str
     top_n: int = 10
     min_budget: int | None = None
     max_budget: int | None = None
     agency: str | None = None
+
+
+class Eval(BaseModel):
+    evalset: str
+    model: str = "mini"
+    judge: bool = True
+    judge_model: str = "nano"
+    limit: int | None = None
+    generation: bool = True
 
 
 class Ask(BaseModel):
@@ -70,6 +111,9 @@ def warm():
     복제되어 2GB 씩 먹는다.
     """
     retrieve("준비")
+    evalrun.sweep()  # 재시작 전에 돌던 평가는 끝난 걸로 표시한다
+    if not API_TOKEN:
+        print("경고: API_TOKEN 이 비어 있습니다. 8010 이 통째로 열려 있습니다.")
 
 
 @app.get("/models")
@@ -89,6 +133,8 @@ def models():
             "name": cfg.model,
             "provider": cfg.provider,
             "ready": cfg.provider != "sglang" or cfg.model == loaded,
+            # 화면의 예상 비용이 이 값으로 계산된다. VM 모델은 0 이다.
+            "usd_per_call": cfg.usd_per_call,
         }
         for key, cfg in MODEL_CONFIGS.items()
     ]
@@ -128,6 +174,56 @@ def file(doc_id: str):
         raise HTTPException(404, f"원본 파일이 없습니다: {doc_id}")
     path, name = found
     return FileResponse(path, filename=name, media_type="application/octet-stream")
+
+
+@app.get("/evalsets")
+def evalsets():
+    """`data/` 에 있는 평가 세트와 문항 수, 그리고 예상 비용.
+
+    **시작 전에 얼마 드는지 보여 주려는 것이다.** 팀 예산이 $20 인데 191문항
+    한 바퀴가 $1.34 다. 눌러 놓고 나중에 아는 것과 누르기 전에 아는 것은 다르다.
+    """
+    rows = []
+    for path in sorted(settings.DATA.glob("*.json")) + sorted(settings.DATA.glob("*.jsonl")):
+        if path.stem.endswith(".meta"):
+            continue
+        try:
+            count = len(load_evalset(path.stem))
+        except Exception:  # noqa: BLE001  평가 세트가 아닌 json 이 섞여 있다
+            continue
+        # 비용은 모델을 골라야 정해지므로 여기서 안 낸다. 화면이
+        # `GET /models` 의 `usd_per_call` 과 곱한다 — 출처가 하나여야 한다.
+        rows.append({"name": path.stem, "count": count})
+    return rows
+
+
+@app.post("/eval")
+def eval_start(body: Eval):
+    """평가 한 바퀴를 백그라운드로 시작하고 작업번호를 돌려준다."""
+    try:
+        load_evalset(body.evalset)
+    except Exception as error:  # noqa: BLE001
+        raise HTTPException(400, f"평가 세트를 못 읽습니다: {error}")
+    return {"job_id": evalrun.start(**body.model_dump())}
+
+
+@app.get("/eval")
+def eval_list():
+    """최근 작업 목록. 로그는 뺀다."""
+    return evalrun.listing()
+
+
+@app.get("/eval/{job_id}")
+def eval_status(job_id: str):
+    """작업 하나의 지금 상태. UI 가 몇 초마다 부른다.
+
+    화면을 떠났다 돌아와도 이것만 부르면 된다 — 상태가 메모리가 아니라
+    파일에 있다.
+    """
+    job = evalrun.read(job_id)
+    if job is None:
+        raise HTTPException(404, "그런 작업이 없습니다")
+    return job
 
 
 @app.get("/health")
