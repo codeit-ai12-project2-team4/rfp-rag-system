@@ -45,6 +45,26 @@ def run(*args):
     return subprocess.run([sys.executable, *map(str, args)], cwd=ROOT).returncode == 0
 
 
+def newer_raw(made):
+    """`made` 파일보다 나중에 들어온 원본이 몇 건인가.
+
+    크롤러가 새 공고를 받았는데 전처리본이 옛것이면 그 공고는 검색에 안 뜬다.
+    **파일이 있는지만 보면 이걸 못 잡는다** — 있긴 있으니까 O 로 지나간다.
+    상태 파일 없이 mtime 만 본다. 크론이 한 번 실패해도 구멍이 안 생긴다.
+
+    Args:
+        made (Path): 만들어진 산출물.
+
+    Returns:
+        int: 더 새로운 원본 파일 수. 없으면 0.
+    """
+    if not made.exists() or not settings.RAW.exists():
+        return 0
+    cut = made.stat().st_mtime
+    return sum(1 for f in settings.RAW.glob("*")
+               if f.is_file() and f.stat().st_mtime > cut)
+
+
 def check(build=False, service=False):
     """파생물 넷을 차례로 본다.
 
@@ -77,7 +97,7 @@ def check(build=False, service=False):
 
     ran = False
 
-    def preprocess():
+    def preprocess(force=False):
         """원본 hwp/pdf → 전처리본 + 청크. **한 실행에서 한 번만 돈다.**
 
         `run_pipeline` 이 둘을 같이 만든다. [1] 과 [2] 가 각각 부르면 원본을
@@ -87,7 +107,7 @@ def check(build=False, service=False):
             bool: 돌렸으면 True. 원본이 없어서 못 돌렸으면 False.
         """
         nonlocal ran
-        if ran:
+        if ran and not force:
             return True
         raw = [f for f in settings.RAW.glob("*") if f.is_file()]
         if not raw:
@@ -113,9 +133,20 @@ def check(build=False, service=False):
         ran = True
         return True
 
-    # 1. 전처리본. 없으면 여기서 만든다 — 청크까지 같이 나온다.
+    # 1. 전처리본. 없거나 **원본보다 오래됐으면** 여기서 만든다.
+    #
+    # 있는지만 보면 안 된다. 크롤러가 새 공고를 받아도 전처리본 파일은 그대로
+    # 있으므로 "O" 로 지나가고, 새 공고가 영영 색인에 안 들어간다.
+    # 원본 폴더에 더 새 파일이 있으면 다시 돌린다.
     docs = settings.PROCESSED / f"{cfg.DOCS}.jsonl"
     print(f"\n[1] 전처리본  {docs.name}")
+    if docs.exists() and newer_raw(docs):
+        print(f"    ! 원본이 더 새롭습니다 ({newer_raw(docs)}건). 다시 돌립니다")
+        if build:
+            preprocess(force=True)
+        else:
+            print("    (--build 로 다시 만듭니다)")
+            ok = False
     if not docs.exists() and build:
         print("    X 없습니다")
         preprocess()
