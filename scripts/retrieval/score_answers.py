@@ -83,6 +83,9 @@ def main():
     parser.add_argument("files", nargs="+", help="answers_*.jsonl")
     parser.add_argument("--judge", action="store_true", help="충실성까지 잰다 (LLM)")
     parser.add_argument("--model", default="nano")
+    # 화면에 표를 찍는 것 말고 값도 남긴다. UI 가 이걸 읽는다 —
+    # 찍힌 표를 파싱하는 건 서식이 한 칸만 바뀌어도 깨진다.
+    parser.add_argument("--json", dest="json_out", help="지표를 JSON 으로 저장")
     args = parser.parse_args()
 
     table = {}
@@ -123,6 +126,24 @@ def main():
                 values = by_type.get(kind, {}).get(key, [])
                 line += f"{(sum(values) / len(values)):>24.3f}" if values else f"{'-':>24}"
             print(line)
+
+    if args.json_out:
+        out = {
+            name: {
+                kind: {
+                    key: sum(values) / len(values)
+                    for key, values in by_key.items()
+                    if values
+                }
+                for kind, by_key in by_type.items()
+            }
+            for name, by_type in table.items()
+        }
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json_out).write_text(
+            json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"지표 저장 → {args.json_out}")
 
 
 if __name__ == "__main__":
