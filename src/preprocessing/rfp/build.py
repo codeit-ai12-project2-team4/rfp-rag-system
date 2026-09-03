@@ -90,7 +90,9 @@ def run_pipeline(
 
     Args:
         raw_path (str): 원본 문서 디렉토리
-        eda_output_path (str): EDA 후 cleaned_document 저장할 디렉토리
+        eda_output_path (str): `cleaned_documents.jsonl` 을 둘 디렉토리.
+            (문서별 .txt 를 같이 쓰던 자리라 이름이 `eda_` 다. 2026-09-03 에
+            .txt 를 지워서 지금은 jsonl 하나만 여기 들어간다.)
         prep_output_path (str): 전처리 후 청크 파일을 저장할 디렉토리
         metadata_path (str | None, optional): 메타데이터(csv 파일). Defaults to None.
         sample_size (int | None, optional): 문서의 일부만 샘플링해서 쓸 경우에 사용. Defaults to None.
@@ -102,8 +104,11 @@ def run_pipeline(
         tuple[pd.DataFrame, dict]: _description_
     """
 
+    # jsonl 을 쓸 폴더. 문서별 .txt 를 쓰던 자리라 이름이 `eda_` 지만
+    # 지금은 `cleaned_documents.jsonl` 하나만 여기 들어간다.
+    # 인자 이름은 전처리팀 서명 그대로 둔다 — 부르는 쪽이 키워드로 넘긴다.
     eda_output_path = Path(eda_output_path)
-    eda_output_path.mkdir(exist_ok=True)
+    eda_output_path.mkdir(parents=True, exist_ok=True)
     prep_output_path = Path(prep_output_path)
     prep_output_path.mkdir(parents=True, exist_ok=True)
 
@@ -165,11 +170,14 @@ def run_pipeline(
 
         rows.append(row)
 
-        if row["clean_text"]:
-            (eda_output_path / f"{path.stem}.txt").write_text(
-                row["clean_text"],
-                encoding="utf-8",
-            )
+        # 문서마다 `.txt` 를 하나씩 더 쓰던 자리다. **지웠다 (2026-09-03).**
+        # 같은 본문이 `cleaned_documents.jsonl` 에 이미 들어간다. 눈으로 보려고
+        # 전처리팀이 두던 것인데, 지금은 이 함수를 크론이 매일 돌리므로 원본
+        # 수만큼 파일이 계속 쌓인다. 게다가 캐시로 재사용한 문서는 이 줄을
+        # 건너뛰어서(위의 `continue`) **있는 것과 없는 것이 섞여 있었다** —
+        # 그 상태의 폴더는 눈으로 보는 용도로도 못 쓴다.
+        # 다시 필요하면 jsonl 에서 뽑는 게 맞다:
+        #     python -c "import json,sys;[print(json.loads(l)['page_content']) ...]"
 
     print(f"추출: 재사용 {reused}건 · 새로 {len(files) - reused}건")
 
@@ -227,6 +235,7 @@ def write_jsonl(
         if col not in ("filename", "clean_text", "clean_text_for_generation")
     ]
 
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for _, row in df.iterrows():
             record = {

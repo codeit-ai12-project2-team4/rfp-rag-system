@@ -26,8 +26,9 @@ from preprocessing.rfp.build import write_jsonl
 from preprocessing.rfp.meta import merge_original_metadata
 from preprocessing.run import from_langchain
 
-CSV = """공고 번호,공고 차수,사업명,사업 금액,발주 기관,공개 일자,입찰 참여 시작일,입찰 참여 마감일,사업 요약,파일형식,파일명,텍스트
-20240330003,0,클라우드 전환 사업,500000000,한국전력공사,2024-03-30,2024-04-01,2024-04-15,요약이다,hwp,가.hwp,잘린텍스트
+# 크롤러 HEADER 와 같은 모양. `금액구분` 은 2026-09-03 에 맨 뒤로 붙였다.
+CSV = """공고 번호,공고 차수,사업명,사업 금액,발주 기관,공개 일자,입찰 참여 시작일,입찰 참여 마감일,사업 요약,파일형식,파일명,텍스트,금액구분
+20240330003,0,클라우드 전환 사업,500000000,한국전력공사,2024-03-30,2024-04-01,2024-04-15,요약이다,hwp,가.hwp,잘린텍스트,배정예산
 """
 
 
@@ -73,6 +74,7 @@ def test_한_바퀴():
         assert meta["title"] == "클라우드 전환 사업", meta
         assert meta["agency"] == "한국전력공사", meta
         assert meta["bid_open_at"] == "2024-04-01", meta   # 예전에 사라지던 필드
+        assert meta["budget_kind"] == "배정예산", meta    # 크롤러가 안 버리게 된 값
         assert str(meta["notice_seq"]) in ("0", "0.0"), meta
         assert meta["doc_id"] == "20240330003-0", meta["doc_id"]
         assert meta["file_name"] == "가.hwp", meta
