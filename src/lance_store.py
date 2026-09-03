@@ -318,19 +318,27 @@ def _doc_hashes(table):
     """테이블에 든 문서별 본문 지문. **벡터 컬럼은 안 읽는다.**
 
     벡터가 용량의 99% 다. 1,024차원 float 이 청크마다 4KB 라 10만 청크면
-    400MB 를 읽게 된다. doc_id 와 text 만 꺼내면 십수 MB 다.
+    400MB 를 읽게 된다. 벡터만 빼면 십수 MB 다.
+
+    **본문뿐 아니라 메타데이터도 지문에 넣는다.** 본문만 보면, CSV 를 고쳐
+    제목이 비로소 채워진 문서가 "안 바뀐 문서" 로 잡혀 그냥 지나간다.
+    화면에는 제목이 계속 안 나오고, 다시 돌려도 매번 0건 변경이다.
 
     `to_lance()` 를 안 쓰는 이유는 그게 pylance 를 따로 깔아야 하기 때문이다.
     `limit(None)` 이 없으면 기본 10행만 온다 — 그러면 나머지가 전부
     "빠진 공고" 로 잡혀 통째로 지워진다.
     """
     got = (
-        table.search().select(["doc_id", "text"]).limit(None).to_arrow().to_pydict()
+        table.search()
+        .select(["doc_id", "text", "meta"])
+        .limit(None)
+        .to_arrow()
+        .to_pydict()
     )
     by = {}
-    for doc_id, text in zip(got["doc_id"], got["text"]):
-        by.setdefault(doc_id, []).append(text or "")
-    return {doc_id: _digest(texts) for doc_id, texts in by.items()}
+    for doc_id, text, meta in zip(got["doc_id"], got["text"], got["meta"]):
+        by.setdefault(doc_id, []).append((text or "") + "\x00" + (meta or ""))
+    return {doc_id: _digest(parts) for doc_id, parts in by.items()}
 
 
 def sync_docs(name, chunks, embedder, verbose=True):
@@ -357,12 +365,14 @@ def sync_docs(name, chunks, embedder, verbose=True):
     store = load_store(name, embedder)  # 여기서 모델 도장을 검사한다
     old = _doc_hashes(store.table)
 
-    texts = {}
+    parts = {}
     for chunk in chunks:
-        texts.setdefault(str(chunk.metadata.get("doc_id") or ""), []).append(
+        parts.setdefault(str(chunk.metadata.get("doc_id") or ""), []).append(
             chunk.page_content
+            + "\x00"
+            + json.dumps(chunk.metadata, ensure_ascii=False)
         )
-    new = {doc_id: _digest(t) for doc_id, t in texts.items()}
+    new = {doc_id: _digest(p) for doc_id, p in parts.items()}
 
     gone = [d for d in old if d not in new]
     changed = [d for d in new if d in old and old[d] != new[d]]
