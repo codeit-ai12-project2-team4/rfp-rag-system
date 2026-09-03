@@ -22,12 +22,14 @@ HOME=/home/spai1203
 # --- 수집 → 전처리 → 색인 → 재시작 -----------------------------------------
 #
 # 새벽 크롤링이 끝난 뒤에 돈다(3:30 시작, 45분이면 넉넉). prepare.py 가
+# `--service` 라서 [1]전처리본 [2]청크 [3]인덱스까지만 본다. 평가 세트는
+# API 가 안 읽고, 없다고 ok=False 가 되면 `&&` 가 막혀 재시작이 안 된다.
 # 전처리본·청크·인덱스·평가세트를 순서대로 보고 없는 것만 만든다.
 # 새 공고가 없으면 전부 O 로 지나가고 몇 초에 끝난다.
 #
 # **STORE=lance 는 .env 에 있으므로 여기 안 적는다.** 두 군데 적으면 한쪽만
 # 고치게 된다. prepare.py 가 .env 를 읽어 lance 쪽만 검사·생성한다.
-45 3 * * * cd $HOME/rfp-rag-system && .venv/bin/python scripts/retrieval/prepare.py --build >> /tmp/index.log 2>&1 && sudo systemctl restart bidmate-api
+45 3 * * * cd $HOME/rfp-rag-system && .venv/bin/python scripts/retrieval/prepare.py --build --service >> /tmp/index.log 2>&1 && sudo systemctl restart bidmate-api
 
 0 4 * * 0 : > /tmp/index.log
 

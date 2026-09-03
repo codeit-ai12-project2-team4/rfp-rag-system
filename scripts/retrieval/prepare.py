@@ -45,11 +45,12 @@ def run(*args):
     return subprocess.run([sys.executable, *map(str, args)], cwd=ROOT).returncode == 0
 
 
-def check(build=False):
+def check(build=False, service=False):
     """파생물 넷을 차례로 본다.
 
     Args:
         build (bool): 없거나 어긋나면 만들지.
+        service (bool): 서비스에 필요한 것까지만 본다(평가 세트를 건너뛴다).
 
     Returns:
         bool: 전부 준비됐으면 True.
@@ -207,7 +208,19 @@ def check(build=False):
     elif stale:
         ok = False
 
-    # 4. 평가 세트
+    # 4. 평가 세트. **서비스에는 안 쓴다.**
+    #
+    # API 가 읽는 건 [2] 청크와 [3] 인덱스까지다. 평가 세트는 측정 도구
+    # (compare_retrieval·eval_notices)만 쓴다. 그래서 --service 면 건너뛴다.
+    #
+    # 안 건너뛰면 크론이 조용히 멈춘다 — 평가 세트가 없으면 ok=False 가 되고,
+    # `prepare.py --build && systemctl restart` 의 && 가 안 넘어간다. 색인은
+    # 새로 만들어졌는데 API 는 옛것을 물고 있는 상태가 된다.
+    if service:
+        print("\n[4] 평가 세트  건너뜀 (--service)")
+        print("\n" + ("전부 준비됐습니다" if ok else "빠진 게 있습니다"))
+        return ok
+
     stem = cfg.EVALSET
     print(f"\n[4] 평가 세트  {stem}.json")
     stamp = settings.DATA / f"{stem}.meta.json"
@@ -254,8 +267,13 @@ def check(build=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="없거나 어긋나면 만든다")
+    parser.add_argument(
+        "--service",
+        action="store_true",
+        help="서비스에 필요한 것까지만 (평가 세트 건너뜀). 크론이 쓴다",
+    )
     args = parser.parse_args()
-    sys.exit(0 if check(args.build) else 1)
+    sys.exit(0 if check(args.build, args.service) else 1)
 
 
 if __name__ == "__main__":
