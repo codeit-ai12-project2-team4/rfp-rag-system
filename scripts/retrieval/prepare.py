@@ -74,26 +74,26 @@ def check(build=False):
     print(f"  청크      {chunks}")
     print(f"  인덱스     {index}")
 
-    # 1. 전처리본
-    docs = settings.PROCESSED / f"{cfg.DOCS}.jsonl"
-    print(f"\n[1] 전처리본  {docs.name}")
-    if not docs.exists():
-        print("    X 없습니다. EDA 팀에서 받아 data/processed/ 에 두세요")
-        return False
-    print("    O")
+    ran = False
 
-    # 2. 청크
-    path = settings.CHUNKS / f"{chunks}.jsonl"
-    print(f"\n[2] 청크  {path.name}")
-    if path.exists():
-        print(f"    O  {sum(1 for _ in open(path)):,}개")
-    elif cfg.CHUNKS and build:
-        # 전처리팀 파이프라인을 그대로 돌린다. `chunking.py` 로 만들면 이름만
-        # 비슷하고 표 원자성도 검색용/생성용 두 벌도 없는 다른 물건이 나온다.
-        #
-        # 전처리본과 청크를 **한 번에** 만든다. 원본 문서를 다 다시 읽으므로
-        # 100건에 몇 분 걸린다 — 새 공고를 받은 뒤에만 부를 것.
-        print("    X 없습니다. 전처리 파이프라인을 돌립니다 (원본 전체를 다시 읽습니다)")
+    def preprocess():
+        """원본 hwp/pdf → 전처리본 + 청크. **한 실행에서 한 번만 돈다.**
+
+        `run_pipeline` 이 둘을 같이 만든다. [1] 과 [2] 가 각각 부르면 원본을
+        두 번 읽는다 — 100건에 몇 분이라 두 번은 못 봐준다.
+
+        Returns:
+            bool: 돌렸으면 True. 원본이 없어서 못 돌렸으면 False.
+        """
+        nonlocal ran
+        if ran:
+            return True
+        raw = [f for f in settings.RAW.glob("*") if f.is_file()]
+        if not raw:
+            print(f"    X 원본이 없습니다: {settings.RAW}")
+            print("      python src/crawl.py --days 1     부터 돌리세요")
+            return False
+        print(f"    → 전처리 파이프라인을 돌립니다 (원본 {len(raw):,}건, 몇 분 걸립니다)")
         from preprocessing.rfp import run_pipeline
 
         run_pipeline(
@@ -109,9 +109,33 @@ def check(build=False):
             chunk_size=cfg.SIZE,
             chunk_overlap=cfg.OVERLAP,
         )
-        ok = path.exists() and ok
+        ran = True
+        return True
+
+    # 1. 전처리본. 없으면 여기서 만든다 — 청크까지 같이 나온다.
+    docs = settings.PROCESSED / f"{cfg.DOCS}.jsonl"
+    print(f"\n[1] 전처리본  {docs.name}")
+    if not docs.exists() and build:
+        print("    X 없습니다")
+        preprocess()
+    if not docs.exists():
+        print("    X 없습니다 (--build 로 전처리부터 돌립니다)")
+        return False
+    print("    O")
+
+    # 2. 청크
+    path = settings.CHUNKS / f"{chunks}.jsonl"
+    print(f"\n[2] 청크  {path.name}")
+    if path.exists():
+        print(f"    O  {sum(1 for _ in open(path)):,}개")
+    elif cfg.CHUNKS and build:
+        # 전처리팀 파이프라인이 만든다. `chunking.py` 로 만들면 이름만 비슷하고
+        # 표 원자성도 검색용/생성용 두 벌도 없는 다른 물건이 나온다.
+        print("    X 없습니다")
+        preprocess()  # [1] 에서 이미 돌았으면 그냥 지나간다
         if not path.exists():
             print(f"    X 파이프라인이 돌았는데도 {path.name} 이 없습니다")
+            print(f"      config 의 CHUNKS 와 파이프라인이 쓰는 이름이 다를 수 있습니다")
             return False
         print(f"    O  {sum(1 for _ in open(path)):,}개")
     elif cfg.CHUNKS:
