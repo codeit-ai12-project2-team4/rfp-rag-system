@@ -56,6 +56,12 @@ def main():
     missing = want - docs
     if missing:
         print(f"    X 색인에 없는 문서 {len(missing)}건: {sorted(missing)[:5]}")
+        stale = {d for d in docs - want if str(d).startswith("nofile-")}
+        if stale:
+            print(f"    → 색인 쪽에 nofile- 로 남은 게 {len(stale)}건.")
+            print("      청크 파일은 doc_id 가 바뀌었는데 색인이 안 따라온 것이다.")
+            print("      Dense 와 BM25 가 서로 다른 문서를 가리킨다.")
+            print("      고치는 법:  python src/lance_store.py --chunks <이름> --force")
     else:
         print("    O 문서 집합이 같다")
 
