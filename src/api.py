@@ -8,6 +8,7 @@
     POST /search   자연어로 공고 찾기 (1단계 — 사람이 목록에서 고르는 화면)
     POST /ask      고른 공고 안에서 질문 (2단계 — 발췌 → 답변 → 출처)
     GET  /file/{doc_id}  그 공고의 원본 RFP 내려받기
+    GET  /health   무엇이 떠 있고 무엇을 보고 있는지 (Vercel 에서 열면 배선 전체가 보인다)
     GET  /models   드롭다운에 채울 모델 목록
 
 **시나리오 A/B 는 여기 없다.** 그건 우리 인프라 선택이지 고객의 선택이 아니고,
@@ -127,3 +128,42 @@ def file(doc_id: str):
         raise HTTPException(404, f"원본 파일이 없습니다: {doc_id}")
     path, name = found
     return FileResponse(path, filename=name, media_type="application/octet-stream")
+
+
+@app.get("/health")
+def health():
+    """무엇이 떠 있고 무엇을 보고 있는지.
+
+    **브라우저로 `https://<vercel주소>/api/health` 를 열면 배선 전체가 한 번에
+    확인된다** — Vercel rewrite → VM:8010 → TEI·SGLang·인덱스. 어느 칸이
+    비어 있는지로 어디가 끊겼는지 바로 안다. 크론이나 감시에도 그대로 쓴다.
+
+    무거운 걸 새로 열지 않는다. 이미 뜬 것에 물어보기만 하므로 자주 불러도 된다.
+    """
+    import requests
+
+    from config import retrieval as cfg
+    from models.embed import TEI_EMBED_URL
+    from models.rerank import TEI_RERANK_URL
+    from models.sglang import current
+
+    def tei(url):
+        try:
+            return requests.get(f"{url}/info", timeout=2).json().get("model_id")
+        except Exception:  # noqa: BLE001 - 안 떠 있는 것도 상태다
+            return None
+
+    embed, rerank = tei(TEI_EMBED_URL), tei(TEI_RERANK_URL)
+    generator = current()
+    return {
+        # 검색이 도는 데 반드시 필요한 것들. 하나라도 null 이면 /search 가 죽는다.
+        "ok": bool(embed and rerank),
+        "embedder": embed,
+        "reranker": rerank,
+        # 지금 GPU 에 올라와 있는 생성 모델. null 이면 첫 질문이 1~2분 걸린다.
+        "generator": generator,
+        # **어떤 코퍼스를 보고 있는지.** 배포 사고의 절반이 여기가 어긋난 것이다.
+        "store": cfg.STORE,
+        "index": cfg.index_name(),
+        "chunks": cfg.chunk_name(),
+    }
