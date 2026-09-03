@@ -42,6 +42,10 @@
 * **`eval_set_30.jsonl` (마무리 단계):** LLM-as-a-judge(Ragas)를 활용한 최종 답변 생성 품질 및 Faithfulness 채점용.
 ---
 
+골든셋을 만들어 넘길 때의 규격은 [`GOLDENSET.md`](GOLDENSET.md) 에 있다.
+
+---
+
 ## 채점만 로컬에서 (다른 팀원용)
 
 **검색을 다시 돌릴 필요가 없다.** `contexts_*.jsonl` 한 줄이 곧
@@ -112,6 +116,22 @@ python scripts/retrieval/score_answers.py \
 print('빈 발췌', sum(1 for r in rows if not r['context']), '/', len(rows))"
 
 `Groundedness` 는 안 잰다 — 충실성과 사실상 같은 것을 묻는데 LLM 호출만 두 배다.
+
+### 근거를 들고 있는 세트라면 (generator.py 산출물)
+
+`question`·`answer`·`evidence_text` 를 다 갖고 있는 세트는 **검색이 필요 없다.**
+합성 문서라 코퍼스에 없어도 잰다.
+
+```bash
+python scripts/retrieval/contexts_from_evidence.py data/generation_qaset_100.jsonl
+# → outputs/eval_results/contexts_generation_qaset_100.jsonl
+# 그다음은 위 2)3) 과 똑같다
+```
+
+정답 근거 하나만 주면 `[1]` 밖에 못 달아 인용정확도가 늘 1.0 이 된다. 그래서
+다른 문항의 근거를 섞어 발췌 3개를 만들고 정답 자리를 무작위로 둔다.
+
+**이건 검색을 뺀 생성 상한이다.** 서비스 숫자(`eval_qa_both`)와 나란히 두지 말 것.
 
 ---
 

@@ -86,6 +86,13 @@ def main():
     # 화면에 표를 찍는 것 말고 값도 남긴다. UI 가 이걸 읽는다 —
     # 찍힌 표를 파싱하는 건 서식이 한 칸만 바뀌어도 깨진다.
     parser.add_argument("--json", dest="json_out", help="지표를 JSON 으로 저장")
+    # 물러섬은 **점수가 아니라 비율이다.** 세트가 전부 answerable: true 면
+    # 물러선 문항은 전부 오답이다. 그런데 그중에는 질문 자체가 답할 수 없는
+    # 것이 섞여 있다 — 표에서 정규식으로 뽑다 보면 "C 업체가 왜 0점인가" 같은
+    # 가상의 문항이 만들어진다. 모델이 물러선 게 맞는데 오답으로 세는 것이다.
+    # 눈으로 보고 세트를 고칠지 모델을 고칠지 정해야 한다.
+    parser.add_argument("--misses", action="store_true",
+                        help="물러선 문항의 질문·정답·답변을 펼친다")
     args = parser.parse_args()
 
     table = {}
@@ -110,6 +117,17 @@ def main():
             judged = len(by_type["전체"].get("충실성", []))
             if judged < len(rows):
                 print(f"  ⚠ 판정불가 {len(rows) - judged}개 — 빈 응답이면 토큰 예산을 의심한다")
+
+        if args.misses:
+            backed = [(r, s) for r, s in zip(rows, scored) if s["물러섬"]]
+            print(f"\n[{Path(path).stem}] 물러선 문항 {len(backed)}/{len(rows)}개")
+            for row, _ in backed[:20]:
+                mark = "" if row.get("answerable", True) else "  (answerable:false — 맞는 답)"
+                print(f"\n  {row.get('qid')}{mark}")
+                print(f"    질문   {row.get('question', '')[:90]}")
+                keywords = row.get("keywords") or []
+                print(f"    정답   {str(keywords[0])[:90] if keywords else '(없음)'}")
+                print(f"    답변   {(row.get('answer') or '')[:90]}")
 
         table[Path(path).stem] = by_type
 
