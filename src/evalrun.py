@@ -34,6 +34,7 @@ from pathlib import Path
 
 from config import settings
 
+UPLOAD_PREFIX = "upload_"  # api.py 와 같은 값. 여기서 지울지 판정한다
 RUNS = settings.OUTPUTS / "eval_runs"
 LOG_LINES = 400  # 이보다 오래된 줄은 버린다. 파일이 무한정 자라면 읽는 쪽이 느려진다
 PYTHON = sys.executable
@@ -226,8 +227,27 @@ def _run(job):
         job["error"] = f"{type(error).__name__}: {error}"
         _log(job, f"X {job['error']}")
     finally:
+        dropped = _drop_upload(options["evalset"])
+        if dropped:
+            _log(job, f"업로드본 {dropped} 을 지웠습니다")
         job["finished_at"] = time.time()
         _write(job)
+
+
+def _drop_upload(evalset):
+    """업로드해서 쓴 평가 세트를 지운다. 채점이 끝나면(실패해도) 부른다.
+
+    **접두어로만 판정한다.** 이름을 그대로 믿고 지우면 `eval_qa_both` 같은
+    진짜 세트를 날릴 수 있다. 경로도 다시 확인한다 — `../` 가 섞여 들어오면
+    `data/` 밖을 지우게 된다.
+    """
+    if not str(evalset).startswith(UPLOAD_PREFIX):
+        return
+    path = (settings.DATA / f"{evalset}.json").resolve()
+    if path.parent == settings.DATA.resolve() and path.exists():
+        path.unlink()
+        return path.name
+    return None
 
 
 def sweep():

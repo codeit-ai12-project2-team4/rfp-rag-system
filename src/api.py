@@ -23,11 +23,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 import hmac
+import json
+import re
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from config import MODEL_CONFIGS, settings
@@ -84,6 +86,14 @@ class Search(BaseModel):
     min_budget: int | None = None
     max_budget: int | None = None
     agency: str | None = None
+
+
+class Upload(BaseModel):
+    name: str
+    # 파일 내용을 그대로. **multipart 를 안 쓴다** — 그러면 `python-multipart` 를
+    # 새로 깔아야 하는데, 평가 세트는 커야 수백 KB 라 그럴 값이 없다.
+    # 브라우저가 `file.text()` 로 읽어 보낸다.
+    content: str
 
 
 class Eval(BaseModel):
@@ -195,6 +205,51 @@ def evalsets():
         # `GET /models` 의 `usd_per_call` 과 곱한다 — 출처가 하나여야 한다.
         rows.append({"name": path.stem, "count": count})
     return rows
+
+
+# 업로드한 세트는 이 접두어를 단다. **채점이 끝나면 지운다** — 안 지우면
+# `data/` 에 남의 파일이 무한정 쌓인다. 지우는 판정도 이 접두어로 한다.
+UPLOAD_PREFIX = "upload_"
+UPLOAD_MAX = 5 << 20  # 5MB. 191문항짜리가 1MB 남짓이다
+
+
+@app.post("/eval/upload")
+def eval_upload(body: Upload):
+    """평가 세트를 올린다. `.json`(배열)과 `.jsonl`(한 줄에 하나) 둘 다 받는다.
+
+    저장은 항상 `.json` 배열로 한다 — `load_evalset` 이 그것만 읽는다.
+    **여기서 파싱해 보고 안 되면 받지 않는다.** 안 그러면 몇 분 뒤 평가가
+    엉뚱한 데서 죽고, 원인이 업로드였다는 걸 알기 어렵다.
+
+    Returns:
+        `{"evalset": 이름, "count": 문항 수}`.
+    """
+    if len(body.content) > UPLOAD_MAX:
+        raise HTTPException(400, f"파일이 너무 큽니다 ({UPLOAD_MAX >> 20}MB 까지)")
+
+    text = body.content.strip()
+    try:
+        if text.startswith("["):
+            rows = json.loads(text)
+        else:  # jsonl
+            rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    except json.JSONDecodeError as error:
+        raise HTTPException(400, f"JSON 을 못 읽었습니다: {error}")
+
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "문항이 없습니다")
+    missing = [i for i, row in enumerate(rows, 1)
+               if not isinstance(row, dict) or not row.get("question")]
+    if missing:
+        raise HTTPException(400, f"question 이 없는 줄: {missing[:5]}")
+
+    # 경로가 섞여 들어오면 `data/` 밖에 쓰게 된다. 이름은 우리가 만든다.
+    safe = re.sub(r"[^0-9A-Za-z가-힣._-]", "_", Path(body.name).stem)[:40]
+    stem = f"{UPLOAD_PREFIX}{datetime.now():%m%d-%H%M%S}_{safe}"
+    (settings.DATA / f"{stem}.json").write_text(
+        json.dumps(rows, ensure_ascii=False), encoding="utf-8"
+    )
+    return {"evalset": stem, "count": len(rows)}
 
 
 @app.post("/eval")
