@@ -176,6 +176,87 @@ TEI·SGLang 은 GPU 를 쓰지만 uvicorn 프로세스는 FAISS·청크·BM25 �
 메모리**에 올리고 이 VM 은 16GB 다. `journalctl -u bidmate-api | grep -i oom`
 에 뭔가 보이면 워커를 늘리지 말고 `POOL` 이나 청크 수부터 줄인다.
 
+## 전체 세팅 — 무엇이 자동이고 무엇이 손인가
+
+| | 부팅 후 자동? | 왜 |
+|---|---|---|
+| TEI 임베딩·SPLADE·리랭커 | **O** | compose 의 `restart: unless-stopped` |
+| SGLang 생성 | **O** | 같음. 기본 모델(Qwen2.5-3B)로 뜬다 |
+| FastAPI :8010 | **O** | `bidmate-api.service` (`enable --now` 했을 때) |
+| 크롤링 | **O** | crontab |
+| 전처리·색인 | **X** | 증분 경로가 없다. 아래 참고 |
+| Vercel | 무관 | VM 과 독립. `RFP_API` 만 맞으면 된다 |
+
+### 처음 한 번
+
+```bash
+cd ~/rfp-rag-system/docker && sudo docker compose up -d
+sudo cp bidmate-api.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now bidmate-api
+crontab crontab.txt
+groups | grep docker || sudo usermod -aG docker $USER   # 후 재로그인
+```
+
+`enable` 이 부팅 자동을 켠다. `start` 만 하면 재부팅 후 안 뜬다.
+
+### 확인은 한 곳에서
+
+```bash
+curl -s localhost:8010/health | python3 -m json.tool
+```
+
+```json
+{ "ok": true, "embedder": "dragonkue/snowflake-arctic-embed-l-v2.0-ko",
+  "reranker": "dragonkue/bge-reranker-v2-m3-ko",
+  "generator": "Qwen/Qwen2.5-3B-Instruct",
+  "store": "faiss", "index": "cleaned_documents_v8__pipeline_1500_250__tei",
+  "chunks": "cleaned_documents_v8__pipeline_1500_250" }
+```
+
+`null` 인 칸이 끊긴 칸이다. **`store`/`index` 를 같이 주는 이유** — 배포 사고의
+절반이 "어느 코퍼스를 보고 있는지" 가 어긋난 것이었다.
+
+### 재부팅이 진짜 되는지는 재부팅해봐야 안다
+
+```bash
+sudo reboot
+# 3분 뒤
+curl -s localhost:8010/health | python3 -m json.tool
+sudo docker compose -f ~/rfp-rag-system/docker/docker-compose.yml ps
+```
+
+`systemctl is-enabled docker bidmate-api` 가 둘 다 `enabled` 여야 한다.
+기동에 2분 반 걸린다(BM25 형태소 분석 155초) — 바로 안 뜬다고 죽은 게 아니다.
+
+## FAISS 와 LanceDB — 무엇이 다른가
+
+**바꾸는 건 `.env` 한 줄이다.** systemd 유닛은 안 건드린다.
+
+```bash
+echo "STORE=lance" >> ~/rfp-rag-system/.env      # 켜기
+sudo systemctl restart bidmate-api
+```
+
+`settings.load_env()` 가 `config/retrieval.py` 보다 먼저 돌아서 잡힌다.
+`os.environ.setdefault` 라 **명령줄이 `.env` 를 덮는다** — 한 번만 되돌리려면
+`STORE=faiss uvicorn ...`.
+
+|  | FAISS | LanceDB |
+|---|---|---|
+| 인덱스 만들기 | `prepare.py --build` | `STORE=lance prepare.py --build` |
+| 저장 위치 | `outputs/vectorstore/{이름}/` | `outputs/lancedb/{이름}.lance` |
+| 검색 정확도 | — | **겹침 100% · 1위 전부 일치** (실측) |
+| 질문당 | 13ms | 75ms (질문 총 3~5초 중 1~2%) |
+| RAM | 인덱스를 메모리에 | 디스크에서 읽는다 (인덱스 자체는 37MB라 총량 차이는 거의 없다) |
+| 공고 지우기 | 통째로 다시 써야 한다 | `delete_docs()` 한 줄 |
+| 새 공고 붙이기 | pickle 을 다시 쓴다 | `add_chunks()` |
+
+**지금은 FAISS 로 둔다.** Lance 의 값어치는 삭제·증분인데 코퍼스가 고정이면
+실현되지 않는다. 크롤러가 매일 붓기 시작하는 날 `.env` 한 줄로 바꾼다.
+
+`prepare.py` 가 `STORE` 를 보고 그쪽만 검사한다 — 이름은 양쪽이 같고 폴더만
+다르므로, 바꾼 뒤 `prepare.py` 를 한 번 돌리면 없는 쪽을 만들어 준다.
+
 ## 노트북에서 쓰기
 
 ```python

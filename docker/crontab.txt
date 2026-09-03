@@ -1,0 +1,34 @@
+# 입찰메이트 수집 크론.  설치:  crontab docker/crontab.txt
+#                       확인:  crontab -l
+#                       로그:  tail -f /tmp/crawl.log
+#
+# 절대경로로 쓴다 — 크론은 PATH 도 가상환경도 물려받지 않는다. `python` 이라고
+# 쓰면 시스템 파이썬이 잡혀서 "ModuleNotFoundError: lancedb" 로 조용히 실패한다.
+
+SHELL=/bin/bash
+HOME=/home/spai1203
+
+# 업무시간에 3시간마다. 4시간을 되돌아봐서 **일부러 겹치게** 한다.
+# 겹쳐도 이미 가진 doc_id 는 건너뛰므로, 마지막 실행 시각을 적어둘 상태 파일이
+# 필요 없다. 상태 파일은 크론이 한 번 실패하면 그 구간이 영영 구멍으로 남는다.
+0 9-18/3 * * * cd $HOME/rfp-rag-system && .venv/bin/python src/crawl.py --hours 4 >> /tmp/crawl.log 2>&1
+
+# 새벽에 이틀치를 다시 훑는다. 낮에 놓친 것(공고 수정·지연 등록)을 메운다.
+30 3 * * * cd $HOME/rfp-rag-system && .venv/bin/python src/crawl.py --days 2 >> /tmp/crawl.log 2>&1
+
+# 로그가 무한정 자라지 않게. 일요일 새벽에 자른다.
+0 4 * * 0 : > /tmp/crawl.log
+
+# --- 아직 켜지 않은 것 ------------------------------------------------------
+#
+# 받은 문서를 색인에 넣는 줄은 **일부러 비워 뒀다.** 전처리(preprocessing.run)와
+# 청킹이 아직 전체를 다시 돌아서, 매일 켜면 코퍼스가 클수록 몇십 분씩 먹는다.
+# 증분 경로가 붙은 뒤에 아래를 살린다.
+#
+#   45 3 * * * cd $HOME/rfp-rag-system && \
+#     .venv/bin/python -m preprocessing.run && \
+#     .venv/bin/python scripts/retrieval/prepare.py --build && \
+#     sudo systemctl restart bidmate-api
+#
+# 재시작이 필요한 이유: API 가 인덱스를 lru_cache 로 물고 있어서, 새로 만들어도
+# 재시작 전에는 새 공고를 못 본다. 기동에 2분 반 걸리지만 새벽 3시 45분이다.
