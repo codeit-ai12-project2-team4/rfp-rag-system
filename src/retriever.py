@@ -633,6 +633,11 @@ def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwa
     필요도, TEI 를 띄울 필요도 없다. jsonl 한 줄이 `generate_answer()` 한 번에
     그대로 들어간다.
 
+    **scoped 다.** 문항에 `doc_id` 가 있으면 그 공고 안에서만 발췌를 찾는다.
+    즉 1단계(어떤 공고를 볼지 고르기)를 **건너뛴다.** 이걸로 낸 숫자는
+    "공고가 정해진 뒤의 E2E" 이지 전 구간이 아니다. 전 구간은 1단계 Top10 을
+    곱해야 한다 — 발표에 그냥 "E2E" 라고 쓰면 실제보다 후하다.
+
     Args:
         evalset: `data/` 의 평가 세트 이름.
         out_path: 저장 경로.
