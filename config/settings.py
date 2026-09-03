@@ -119,5 +119,13 @@ class Provider(StrEnum):
 
 
 def make_dirs():
-    for folder in (METADATA, PROCESSED, VECTORSTORE, LANCEDB, CHUNKS, REPORTS, EVAL_RESULTS):
+    for folder in (
+        METADATA,
+        PROCESSED,
+        VECTORSTORE,
+        LANCEDB,
+        CHUNKS,
+        REPORTS,
+        EVAL_RESULTS,
+    ):
         folder.mkdir(parents=True, exist_ok=True)

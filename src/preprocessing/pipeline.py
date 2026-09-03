@@ -2387,7 +2387,7 @@ def _build_report(df: pd.DataFrame) -> dict:
 # ============================================================
 
 if __name__ == "__main__":
-    DATA_DIR = Path("/home/spai1216/workspace/data/files")
+    DATA_DIR = Path("여기에 원본 파일 경로")
     OUTPUT_DIR = Path("./output")
     ORIGINAL_METADATA_CSV = Path("./original_metadata.csv")  # 처음 받은 CSV 경로로 수정
 
@@ -2396,3 +2396,23 @@ if __name__ == "__main__":
         OUTPUT_DIR,
         original_metadata_csv=ORIGINAL_METADATA_CSV,
     )
+
+
+# ============================================================
+# 19. 청킹 데이터 파일 뽑기
+# ============================================================
+df = pd.read_csv("")
+
+DOC_PATH = Path(
+    r"C:\Users\asd\Desktop\중급 프젝\v2_chosim\rfp-rag-system\src\preprocessing\output\cleaned_documents.jsonl"
+)
+DOC_PATH.parent.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성
+
+write_jsonl(
+    df,
+    DOC_PATH,
+    enable_chunk_output=True,
+    chunk_output_path=DOC_PATH.with_name("cleaned_documents_v7__chunks_1500_250.jsonl"),
+    chunk_size=1500,
+    chunk_overlap=250,
+)
