@@ -11,7 +11,7 @@
     Dense 는 v3 · Hybrid 는 v4   한 실행 안에서 코퍼스가 섞인다
     retriever.CHUNKS 가 옛것      API 가 옛 설정으로 답한다
 
-설정은 `config/settings.py` 아래쪽 한 곳에만 있다. 여기서는 그것과 디스크를
+설정은 `.env` 와 `config/retrieval.py` 한 곳에만 있다. 여기서는 그것과 디스크를
 대조한다. **사람이 기억할 일이 아니다.**
 """
 
@@ -102,6 +102,12 @@ def check(build=False):
             prep_output_path=settings.OUTPUTS,
             metadata_path=settings.META_CSV,
             enable_chunk_output=True,
+            # **명시해서 넘긴다.** 안 주면 run_pipeline 의 기본 인자가 쓰이는데,
+            # 그건 build.py 를 import 할 때 한 번 굳는다. 위에서 cfg.SIZE 를
+            # "지금 설정" 이라고 찍어 놓고 다른 값으로 자르면 그게 이 파일이
+            # 막으려는 사고 그 자체다.
+            chunk_size=cfg.SIZE,
+            chunk_overlap=cfg.OVERLAP,
         )
         ok = path.exists() and ok
         if not path.exists():
