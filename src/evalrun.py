@@ -30,6 +30,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 from config import settings
@@ -98,6 +99,77 @@ def estimate(count, model="mini", judge=True, judge_model="nano"):
         return cfg.usd_per_call if cfg else 0.0
 
     return round(count * (per(model) + (per(judge_model) if judge else 0.0)), 4)
+
+
+@lru_cache(maxsize=1)
+def _corpus():
+    """코퍼스의 doc_id 와, 파일명 → doc_id 표.
+
+    평가 세트의 `doc_id` 가 우리 것과 다르면 `retrieve(doc_ids=...)` 가 청크를
+    **하나도** 못 고른다. 그러면 발췌가 빈 문자열이 되고, 모델은 답할 게 없어
+    전부 "확인되지 않습니다" 를 낸다. 지표는 물러섬 0.99 · 인용정확도 0.000 으로
+    찍히는데, 그건 성능이 아니라 **입력이 비었다는 신호다.**
+    """
+    import chunking
+
+    from config import retrieval as cfg
+
+    ids, by_file = set(), {}
+    for chunk in chunking.load_chunks(cfg.chunk_name()):
+        doc_id = str(chunk.metadata.get("doc_id") or "")
+        if not doc_id:
+            continue
+        ids.add(doc_id)
+        name = str(chunk.metadata.get("file_name") or "")
+        if name:
+            by_file.setdefault(name, doc_id)
+            by_file.setdefault(Path(name).stem, doc_id)
+    return ids, by_file
+
+
+def normalize(rows):
+    """업로드한 평가 세트를 우리 형식으로 맞추고 정답 문서를 대조한다.
+
+    받아 주는 차이는 셋이다. 팀마다 만든 세트의 필드 이름이 다르다.
+
+        question_type → type      (`없음` 이면 answerable=False 로도 쓴다)
+        evidence_text → keywords
+        doc_id 가 파일명이면 → 코퍼스의 doc_id (`공고번호-차수`)
+
+    Args:
+        rows: 업로드한 줄들.
+
+    Returns:
+        (고친 줄들, 보고 dict). 보고는 `{total, matched, converted, unknown}`.
+    """
+    ids, by_file = _corpus()
+    out, converted, unknown = [], 0, []
+    for row in rows:
+        row = dict(row)
+        if "type" not in row and "question_type" in row:
+            row["type"] = row["question_type"]
+        if row.get("type") == "없음":
+            row.setdefault("answerable", False)
+        if "keywords" not in row and row.get("evidence_text"):
+            row["keywords"] = [row["evidence_text"]]
+
+        doc_id = str(row.get("doc_id") or "")
+        if doc_id and doc_id not in ids:
+            found = by_file.get(doc_id) or by_file.get(Path(doc_id).stem)
+            if found:
+                row["doc_id"] = found
+                converted += 1
+            else:
+                unknown.append(doc_id)
+        out.append(row)
+
+    return out, {
+        "total": len(rows),
+        "matched": len(rows) - len(unknown),
+        "converted": converted,
+        "unknown": sorted(set(unknown))[:10],
+        "unknown_count": len(set(unknown)),
+    }
 
 
 def start(evalset, model="mini", judge=True, judge_model="nano", limit=None,

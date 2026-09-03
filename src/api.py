@@ -243,13 +243,25 @@ def eval_upload(body: Upload):
     if missing:
         raise HTTPException(400, f"question 이 없는 줄: {missing[:5]}")
 
+    # **정답 문서가 코퍼스에 있는지 여기서 본다.** 안 보면 5분 뒤에 물러섬
+    # 0.99 · 인용정확도 0.000 을 보고 "성능이 나쁘다" 고 읽게 된다. 그건
+    # 성능이 아니라 발췌가 빈 것이다 — `retrieve(doc_ids=...)` 가 아무것도
+    # 못 골라서 컨텍스트가 빈 문자열이 된다. 2026-09-03 에 두 세트가 그랬다.
+    rows, report = evalrun.normalize(rows)
+    if not report["matched"]:
+        raise HTTPException(400, {
+            "message": "정답 문서가 코퍼스에 하나도 없습니다. 이대로 돌리면 "
+                       "발췌가 전부 비어 0점이 나옵니다.",
+            **report,
+        })
+
     # 경로가 섞여 들어오면 `data/` 밖에 쓰게 된다. 이름은 우리가 만든다.
     safe = re.sub(r"[^0-9A-Za-z가-힣._-]", "_", Path(body.name).stem)[:40]
     stem = f"{UPLOAD_PREFIX}{datetime.now():%m%d-%H%M%S}_{safe}"
     (settings.DATA / f"{stem}.json").write_text(
         json.dumps(rows, ensure_ascii=False), encoding="utf-8"
     )
-    return {"evalset": stem, "count": len(rows)}
+    return {"evalset": stem, "count": len(rows), **report}
 
 
 @app.post("/eval")

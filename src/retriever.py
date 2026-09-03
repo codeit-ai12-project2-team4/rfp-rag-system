@@ -653,6 +653,7 @@ def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwa
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     started = time.time()
+    empty = 0  # 발췌가 하나도 안 잡힌 문항. doc_id 가 코퍼스와 다르면 전부 여기로 온다
     with open(out_path, "w", encoding="utf-8") as f:
         for i, pair in enumerate(pairs, 1):
             doc_ids = [pair["doc_id"]] if pair.get("doc_id") else None
@@ -678,12 +679,20 @@ def export_contexts(evalset, out_path, generation=False, on_progress=None, **kwa
                 )
                 + "\n"
             )
+            if not chunks:
+                empty += 1
             print(f"  {i}/{len(pairs)}", end="\r")
             if on_progress:
                 on_progress(i, len(pairs))
 
     print(" " * 30, end="\r")
     print(f"질문 {len(pairs)}개 · {time.time() - started:.0f}초 → {out_path}")
+    if empty:
+        # 빈 발췌로 답변을 만들면 모델은 "확인되지 않습니다" 밖에 못 낸다.
+        # 채점은 그걸 물러섬 1.0 · 충실성 0.0 으로 적는다 — 성능처럼 보이지만
+        # 입력이 빈 것이다. 여기서 세서 말해 준다.
+        print(f"⚠ 발췌가 하나도 안 잡힌 문항 {empty}/{len(pairs)}개. "
+              f"평가 세트의 doc_id 가 코퍼스와 다를 수 있습니다")
     return len(pairs)
 
 
