@@ -158,3 +158,35 @@ hwpx 는 OWPML(zip 안에 XML). `hwp.py` 의 저수준 파서가 한 줄도 안 
 | `rfp_preprocessing_pipeline.py` | **파일이 이미 없다.** `ingest.py` 가 이걸 import 하고 있어서 같이 고쳤다 |
 
 바깥 `hwp/hwp_table/pdf/clean/toc/run` 은 **전부 살아 있다.** 지우면 API 가 죽는다.
+
+---
+
+## 필드 이름표는 `fields.py` 하나다 (2026-09-03)
+
+같은 아홉 개 필드를 설명하는 표가 네 군데 있었고 이미 갈라져 있었다.
+
+| 있던 곳 | 개수 | 상태 |
+|---|---|---|
+| `run.py COLUMNS` | 11 | CSV(공백 있는 이름) → 영문 |
+| `run.py _LANGCHAIN_META` | 9 | **`공고차수`·`입찰참여시작일` 누락** |
+| `rfp/common.ORIGINAL_METADATA_COLUMNS` | 12 | **`공개기관` 은 CSV 에 없는 유령** |
+| `rfp/meta.build_doc_schema_record` | 10 | 하드코딩. 아무도 안 부른다 |
+
+`입찰참여시작일`(bid_open_at) 은 CSV 에도 있고 청크 메타에도 남는데
+`from_langchain` 이 안 옮겨서 **검색단에서만 존재하지 않는 필드**였다.
+`공개기관` 은 전처리를 돌릴 때마다 "없는 컬럼(건너뜀)" 을 찍고 있었다.
+
+네 곳 모두 `preprocessing/fields.py` 의 `FIELDS` 에서 파생한다.
+확인은 `python scripts/retrieval/check_fields.py` — 표가 하나인지, 열한 개가
+전처리 → 청크 → 검색단으로 다 건너오는지 본다.
+
+## 추출 결과 행의 키는 영문이다
+
+`extract.process_document` 가 내놓는 행의 키는 `extractor`, `clean_text`,
+`table_parse_success` … 전부 영문인데 파일명만 `파일명` 이었다. `filename` 으로
+맞췄다. **CSV 쪽 컬럼(`meta_df`)은 한글 그대로다** — 그건 CSV 파일의 이름이고,
+병합은 `_병합키` 로 붙으므로 양쪽 이름이 달라도 상관없다.
+
+같이 고친 것: `build.py` 의 예외 분기가 `filename` 을 쓰고 정상 분기가 `파일명`
+이었다. 추출이 실패한 문서만 병합 키가 NaN 이 되고 `source` 까지 사라져,
+**메타데이터 없는 문서로 조용히 둔갑**했다.

@@ -54,7 +54,10 @@ def process_document(path: Path) -> dict:
     extraction = extract_document(path)
 
     base = {
-        "파일명": path.name,
+        # 추출 결과 행의 키는 전부 영문이다(extractor, clean_text …).
+        # 이것만 한글일 이유가 없다. CSV 쪽 컬럼은 한글 그대로 두고,
+        # 병합은 `_병합키` 로 붙이므로 이름이 달라도 상관없다.
+        "filename": path.name,
         "extractor": extraction.extractor,
         "table_parse_success": extraction.table_parse_success,
         "tables_total": extraction.tables_total,

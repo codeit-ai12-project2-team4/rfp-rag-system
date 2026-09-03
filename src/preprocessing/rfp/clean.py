@@ -361,7 +361,7 @@ def verify_no_table_markup(
     (청크 단위 df)로 바꿔가며 쓸 수 있다.
 
     Args:
-        df: 검사할 DataFrame. text_col 컬럼과, 있으면 "파일명"/"source"
+        df: 검사할 DataFrame. text_col 컬럼과, 있으면 "filename"/"source"
             컬럼을 사용한다.
         text_col: 검사할 텍스트가 담긴 컬럼명.
 
@@ -380,8 +380,8 @@ def verify_no_table_markup(
         }
 
         if any(hits.values()):
-            identifier = row.get("파일명", row.get("source"))
-            rows.append({"파일명": identifier, **hits})
+            identifier = row.get("filename", row.get("source"))
+            rows.append({"filename": identifier, **hits})
 
     return pd.DataFrame(rows)
 

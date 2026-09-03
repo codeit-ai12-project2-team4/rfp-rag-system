@@ -47,12 +47,12 @@ def _cached_rows(docs_path):
             record = json.loads(line)
             meta = record["metadata"]
             row = {k: v for k, v in meta.items() if k not in drop}
-            row["파일명"] = meta["source"]
+            row["filename"] = meta["source"]
             row["clean_text"] = record["page_content"]
             row["clean_text_for_generation"] = record.get(
                 "page_content_for_generation", ""
             )
-            rows[row["파일명"]] = row
+            rows[row["filename"]] = row
     return rows
 
 
@@ -144,6 +144,10 @@ def run_pipeline(
             # 그 결과 문서 1건의 파싱 실패가 100건 전체 배치를 중단시켰다
             # (사용자가 실제 실행에서 NotOleFileError로 재현). 한 문서 실패가
             # 전체를 막지 않도록 넓게 잡고 다음 문서로 넘어간다.
+            # **`파일명` 이다. 예전에 `filename` 이었다.** 그러면 이 행만
+            # `파일명` 이 NaN 이라 CSV 병합 키가 없고, `write_jsonl` 의
+            # `row["파일명"]` 도 NaN 이 되어 source 가 사라진다. 실패한 문서
+            # 하나가 조용히 메타데이터 없는 문서로 둔갑한다.
             row = {
                 "filename": path.name,
                 "extractor": None,
@@ -220,7 +224,7 @@ def write_jsonl(
     metadata_columns = [
         col
         for col in df.columns
-        if col not in ("파일명", "clean_text", "clean_text_for_generation")
+        if col not in ("filename", "clean_text", "clean_text_for_generation")
     ]
 
     with open(path, "w", encoding="utf-8") as f:
@@ -230,7 +234,7 @@ def write_jsonl(
                 "page_content_for_generation": row.get("clean_text_for_generation")
                 or "",  # 생성/LLM 컨텍스트용 (표 형태별 구조 유지)
                 "metadata": {
-                    "source": row["파일명"],
+                    "source": row["filename"],
                     **{col: row[col] for col in metadata_columns},
                 },
             }
@@ -263,7 +267,7 @@ def write_jsonl(
                     "page_content": embedding_chunk,  # 검색/임베딩용
                     "page_content_for_generation": gen_chunk,  # 생성/LLM 컨텍스트용
                     "metadata": {
-                        "source": row["파일명"],
+                        "source": row["filename"],
                         "chunk_index": i,
                         "chunk_total": len(pairs),
                         **{col: row[col] for col in metadata_columns},
@@ -291,7 +295,7 @@ def _build_report(df: pd.DataFrame) -> dict:
 
     hwp_raw_skipped = df.loc[
         df["hwp_raw_skipped_reason"].notna(),
-        ["파일명", "extractor", "hwp_raw_skipped_reason"],
+        ["filename", "extractor", "hwp_raw_skipped_reason"],
     ]
 
     # [수정 1] 부분 복원된 표 총 개수도 리포트에 남긴다(품질 모니터링용).
@@ -306,11 +310,11 @@ def _build_report(df: pd.DataFrame) -> dict:
         "부분복원_표개수": partial_tables_total,
         "extractor_비율": df["extractor"].value_counts(dropna=False).to_dict(),
         "메타데이터_추출성공률": metadata_success,
-        "실패문서목록": df.loc[df["clean_text"] == "", "파일명"].tolist(),
+        "실패문서목록": df.loc[df["clean_text"] == "", "filename"].tolist(),
         "hwp_raw_조용한_폴백건수": len(hwp_raw_skipped),
         "hwp_raw_조용한_폴백목록": hwp_raw_skipped.to_dict(orient="records"),
         "오류원인": (
-            df.loc[df["error_reason"].notna(), ["파일명", "error_reason"]].to_dict(
+            df.loc[df["error_reason"].notna(), ["filename", "error_reason"]].to_dict(
                 orient="records"
             )
         ),

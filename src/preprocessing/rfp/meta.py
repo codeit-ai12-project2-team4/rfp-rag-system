@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from preprocessing.fields import CSV_COLUMNS, FIELDS, normalize_columns
 from preprocessing.rfp.common import (
     _METADATA_LINE_BOUNDARY,
     FIELD_ALIASES,
@@ -120,7 +121,9 @@ def load_original_metadata(csv_path: Path) -> pd.DataFrame:
 
     df = pd.read_csv(csv_path)
 
-    normalized_to_actual = {col.replace(" ", ""): col for col in df.columns}
+    # 공백 지우기 규칙도 `fields.normalize_columns` 하나로. 여기서 갈리면
+    # 어떤 컬럼은 붙고 어떤 컬럼은 안 붙는 상태가 된다.
+    normalized_to_actual = {v: k for k, v in normalize_columns(df.columns).items()}
 
     rename_map = {}
     missing = []
@@ -212,15 +215,10 @@ def merge_original_metadata(
     df = df.copy()
     meta_df = meta_df.copy()
 
-    df["_병합키"] = df["파일명"].map(_normalize_filename)
+    df["_병합키"] = df["filename"].map(_normalize_filename)
     meta_df["_병합키"] = meta_df["파일명"].map(_normalize_filename)
 
     meta_df.set_index("_병합키")
-
-    check_col = next(
-        (c for c in meta_df.columns if c not in ("파일명", "_병합키")),
-        None,
-    )
 
     exact_matched_keys = set(df["_병합키"]) & set(meta_df["_병합키"])
 
@@ -253,48 +251,59 @@ def merge_original_metadata(
         columns=["_병합키", "_메타키", "_병합키_원본"], errors="ignore"
     )
 
-    if check_col:
-        matched = merged[check_col].notna().sum()
-        fuzzy_count = (merged["메타매칭방식"] == "fuzzy").sum()
+    # **매칭 여부는 `메타매칭방식` 이 진실이다.** 예전에는 meta_df 의 첫 컬럼
+    # (= 공고번호)이 비었는지로 셌는데, 공고번호가 원래 빈 행이 CSV 에 있어서
+    # 붙은 행을 "안 붙었다" 고 보고했다. 실제로 105/105 가 87/105 로 보였다.
+    matched = merged["메타매칭방식"].notna().sum()
+    fuzzy_count = (merged["메타매칭방식"] == "fuzzy").sum()
+    print(
+        f"원본 메타데이터 병합: {matched}/{len(merged)}건 매칭"
+        f" (정확 {matched - fuzzy_count}건 + 근사 {fuzzy_count}건)"
+    )
+
+    if matched < len(merged):
+        unmatched = merged.loc[merged["메타매칭방식"].isna(), "filename"].tolist()
+        print(f"  끝까지 매칭 안 된 파일명({len(unmatched)}건): {unmatched}")
+
+        used_meta_keys = exact_matched_keys | set(fuzzy_map.values())
+        remaining_meta_keys = [
+            k for k in meta_df["_병합키"] if k not in used_meta_keys
+        ]
+        meta_key_to_name = dict(zip(meta_df["_병합키"], meta_df["파일명"]))
+
         print(
-            f"원본 메타데이터 병합: {matched}/{len(merged)}건 매칭"
-            f" (정확 {matched - fuzzy_count}건 + 근사 {fuzzy_count}건)"
+            "\n  [근사 후보 제안] (참고용 - 자동 반영 안 됨, 직접 확인 후 CSV 수정 권장)"
         )
 
-        if matched < len(merged):
-            unmatched = merged.loc[merged[check_col].isna(), "파일명"].tolist()
-            print(f"  끝까지 매칭 안 된 파일명({len(unmatched)}건): {unmatched}")
-
-            used_meta_keys = exact_matched_keys | set(fuzzy_map.values())
-            remaining_meta_keys = [
-                k for k in meta_df["_병합키"] if k not in used_meta_keys
-            ]
-            meta_key_to_name = dict(zip(meta_df["_병합키"], meta_df["파일명"]))
-
-            print(
-                "\n  [근사 후보 제안] (참고용 - 자동 반영 안 됨, 직접 확인 후 CSV 수정 권장)"
+        for name in unmatched:
+            key = _normalize_filename(name)
+            candidates = difflib.get_close_matches(
+                key,
+                remaining_meta_keys,
+                n=1,
+                cutoff=0.4,
             )
 
-            for name in unmatched:
-                key = _normalize_filename(name)
-                candidates = difflib.get_close_matches(
-                    key,
-                    remaining_meta_keys,
-                    n=1,
-                    cutoff=0.4,
+            if candidates:
+                ratio = difflib.SequenceMatcher(None, key, candidates[0]).ratio()
+                print(
+                    f"    {name!r}\n"
+                    f"      → 후보: {meta_key_to_name[candidates[0]]!r}"
+                    f" (유사도 {ratio:.0%})"
+                )
+            else:
+                print(
+                    f"    {name!r}\n      → 후보 없음 (원본 CSV에 없는 문서일 수 있음)"
                 )
 
-                if candidates:
-                    ratio = difflib.SequenceMatcher(None, key, candidates[0]).ratio()
-                    print(
-                        f"    {name!r}\n"
-                        f"      → 후보: {meta_key_to_name[candidates[0]]!r}"
-                        f" (유사도 {ratio:.0%})"
-                    )
-                else:
-                    print(
-                        f"    {name!r}\n      → 후보 없음 (원본 CSV에 없는 문서일 수 있음)"
-                    )
+    # **여기서 세운다.** 안 세우면 제목·발주기관·금액이 전부 빈 채로
+    # 청크가 만들어지고, 색인까지 들어가서 화면에서야 발견된다.
+    # 그때는 원인이 전처리인지 검색인지 UI 인지 알 수가 없다.
+    if matched < len(merged) * 0.9:
+        raise ValueError(
+            f"원본 메타데이터가 {len(merged) - matched}/{len(merged)}건 안 붙었습니다. "
+            f"{original_metadata_csv} 의 '파일명' 과 data/raw 의 파일명을 맞추세요."
+        )
 
     return merged
 
@@ -331,18 +340,15 @@ def build_doc_schema_record(row: dict) -> dict:
 
     text = row.get("clean_text") or ""
 
+    # **표에서 파생한다.** 예전엔 열 줄을 손으로 적어 뒀는데 `입찰참여시작일`
+    # 이 빠져 있었다. 지금 이 함수를 부르는 곳은 없지만(`run_pipeline` 은
+    # `write_jsonl` 을 쓴다), 나중에 누가 살려 쓸 때 또 갈리지 않게 해 둔다.
+    meta = {korean: _clean(row.get(korean)) for korean in CSV_COLUMNS}
     return {
         "meta": {
             "doc_id": doc_id,
-            "notice_no": notice_no,
-            "title": _clean(row.get("사업명")),
-            "agency": _clean(row.get("발주기관")),
-            "budget": _clean(row.get("사업금액")),
-            "published_at": _clean(row.get("공개일자")),
-            "bid_close_at": _clean(row.get("입찰참여마감일")),
-            "summary": _clean(row.get("사업요약")),
-            "file_type": _clean(row.get("파일형식")),
-            "file_name": row.get("파일명"),
+            **{ours: meta[korean] for korean, ours in FIELDS if korean != "파일명"},
+            "file_name": row.get("filename"),
         },
         "text": text,
         "chars": len(text),

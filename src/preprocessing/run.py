@@ -37,25 +37,15 @@ import pandas as pd
 
 from config import settings
 from preprocessing.clean import clean_text
+from preprocessing.fields import FIELDS, TO_ENGLISH, normalize_columns
 from preprocessing.hwp import HwpParseError, extract_hwp_preview_text, extract_hwp_text
 from preprocessing.hwp_table import extract_hwp_tables
 from preprocessing.pdf import PdfParseError, extract_pdf_text, looks_scanned
 from preprocessing.toc import drop_toc
 
-# CSV 컬럼 이름을 코드에서 쓸 이름으로
-COLUMNS = {
-    "공고 번호": "notice_no",
-    "공고 차수": "notice_seq",
-    "사업명": "title",
-    "사업 금액": "budget",
-    "발주 기관": "agency",
-    "공개 일자": "published_at",
-    "입찰 참여 시작일": "bid_open_at",
-    "입찰 참여 마감일": "bid_close_at",
-    "사업 요약": "summary",
-    "파일형식": "file_type",
-    "파일명": "file_name",
-}
+# CSV 컬럼 이름을 코드에서 쓸 이름으로. **표는 `preprocessing/fields.py` 하나다.**
+# 여기 다시 적으면 언젠가 갈린다 — 실제로 갈려서 bid_open_at 이 사라져 있었다.
+COLUMNS = TO_ENGLISH
 
 # 이보다 짧으면 추출 실패로 본다 (표지만 나온 경우)
 MIN_CHARS = 1000
@@ -93,7 +83,9 @@ def make_doc_id(row):
 def load_metadata(csv_path=None):
     """data_list.csv 를 읽어 컬럼 이름을 정리하고 doc_id 를 붙인다."""
     df = pd.read_csv(csv_path or settings.META_CSV)
-    df = df.rename(columns=COLUMNS)
+    # 공백을 먼저 지워 정규 이름으로 맞춘 뒤 영문으로 바꾼다. CSV 원본은
+    # `공고 번호`, 크롤러가 쓰는 건 같은 이름이지만 언제 바뀔지 모른다.
+    df = df.rename(columns=normalize_columns(df.columns)).rename(columns=COLUMNS)
     for column in ("published_at", "bid_open_at", "bid_close_at"):
         df[column] = pd.to_datetime(df[column], errors="coerce")
     df["doc_id"] = df.apply(make_doc_id, axis=1)
@@ -202,16 +194,14 @@ def build_documents(
 
 
 # 팀원이 만든 cleaned_documents.jsonl 의 메타 키 → 우리 키
+# 파이프라인 청크 메타 → 우리 이름. 파일명은 `source` 로 들어온다.
+#
+# **손으로 적지 않는다.** 예전엔 여기에 아홉 줄을 직접 적었는데 `공고차수` 와
+# `입찰참여시작일` 이 빠져 있었다. CSV 에도 있고 청크 메타에도 남아 있는데
+# 검색단에서만 존재하지 않는 필드가 됐다. 표에서 파생하면 그 일이 안 생긴다.
 _LANGCHAIN_META = {
     "source": "file_name",
-    "공고번호": "notice_no",
-    "사업명": "title",
-    "발주기관": "agency",
-    "사업금액": "budget",
-    "공개일자": "published_at",
-    "입찰참여마감일": "bid_close_at",
-    "사업요약": "summary",
-    "파일형식": "file_type",
+    **{korean: ours for korean, ours in FIELDS if korean != "파일명"},
 }
 
 
@@ -224,11 +214,7 @@ def from_langchain(row):
     """
     meta_in = row["metadata"]
     meta = {ours: meta_in.get(theirs) for theirs, ours in _LANGCHAIN_META.items()}
-    meta["doc_id"] = make_doc_id({
-        "notice_no": meta.get("notice_no"),
-        "notice_seq": meta_in.get("공고차수"),
-        "file_name": meta.get("file_name"),
-    })
+    meta["doc_id"] = make_doc_id(meta)  # notice_seq 도 이제 meta 안에 있다
     return {
         "meta": meta,
         "text": row["page_content"],
