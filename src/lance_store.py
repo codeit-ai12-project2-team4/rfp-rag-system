@@ -20,6 +20,7 @@ FAISS 의 IndexFlat 과 같은 조건이라 A/B 가 공정하다. PQ 는 압축�
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -117,6 +118,32 @@ class LanceStore:
         return f"LanceStore({self.name!r}, {len(self)}행)"
 
 
+def _write_stamp(name, model, dim, chunks):
+    """테이블 옆에 도장을 찍는다. `prepare.py` 가 이걸 보고 다시 만들지 정한다.
+
+    Args:
+        name: 테이블 이름.
+        model: 임베딩 모델 이름.
+        dim: 벡터 차원.
+        chunks: 지금 테이블에 들어 있는 청크 전체.
+    """
+    from pieces.search import chunk_signature
+
+    _stamp(name).write_text(
+        json.dumps(
+            {
+                "model": model,
+                "dim": dim,
+                "chunks": len(chunks),
+                "signature": chunk_signature(chunks) if chunks else None,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def build_store(chunks, embedder, name=None, force=False, verbose=True):
     """청크를 임베딩해 LanceDB 테이블을 만든다. `vectorstore.build_store` 와 같은 서명.
 
@@ -162,21 +189,7 @@ def build_store(chunks, embedder, name=None, force=False, verbose=True):
     # **지문까지 찍는다.** 이름도 개수도 같은데 내용만 바뀌는 일이 잦다 —
     # 목차 제거는 줄을 지우므로 청크 개수가 안 변한다(실제로 9,189개 그대로였다).
     # FAISS 인덱스가 이걸로 잡으니 여기도 같아야 prepare.py 가 둘을 같게 본다.
-    from pieces.search import chunk_signature
-
-    _stamp(name).write_text(
-        json.dumps(
-            {
-                "model": _fingerprint(embedder),
-                "dim": len(rows[0]["vector"]),
-                "chunks": len(rows),
-                "signature": chunk_signature(chunks) if chunks else None,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    _write_stamp(name, _fingerprint(embedder), len(rows[0]["vector"]), chunks)
     if verbose:
         print(
             f"테이블 저장: {name} ({_fingerprint(embedder)}, {len(rows[0]['vector'])}차원)"
@@ -288,6 +301,95 @@ def delete_docs(name, doc_ids, embedder=None):
     return before, after
 
 
+def _digest(texts):
+    """본문 여러 개를 순서와 상관없이 한 지문으로. 정렬하고 해싱한다.
+
+    정렬하는 이유는 테이블에서 읽은 행 순서를 믿을 수 없기 때문이다.
+    지우고 다시 넣으면 순서가 바뀌는데, 그때마다 "바뀐 문서" 로 잡히면
+    증분이 아니라 전체 재임베딩이 된다.
+    """
+    digest = hashlib.md5()
+    for text in sorted(texts):
+        digest.update(text.encode())
+    return digest.hexdigest()[:12]
+
+
+def _doc_hashes(table):
+    """테이블에 든 문서별 본문 지문. **벡터 컬럼은 안 읽는다.**
+
+    벡터가 용량의 99% 다. 1,024차원 float 이 청크마다 4KB 라 10만 청크면
+    400MB 를 읽게 된다. doc_id 와 text 만 꺼내면 십수 MB 다.
+
+    `to_lance()` 를 안 쓰는 이유는 그게 pylance 를 따로 깔아야 하기 때문이다.
+    `limit(None)` 이 없으면 기본 10행만 온다 — 그러면 나머지가 전부
+    "빠진 공고" 로 잡혀 통째로 지워진다.
+    """
+    got = (
+        table.search().select(["doc_id", "text"]).limit(None).to_arrow().to_pydict()
+    )
+    by = {}
+    for doc_id, text in zip(got["doc_id"], got["text"]):
+        by.setdefault(doc_id, []).append(text or "")
+    return {doc_id: _digest(texts) for doc_id, texts in by.items()}
+
+
+def sync_docs(name, chunks, embedder, verbose=True):
+    """테이블을 청크 파일과 맞춘다. **새 공고·바뀐 공고만 임베딩한다.**
+
+    크론이 하루 여러 번 크롤링하면 코퍼스는 계속 자라는데 새로 들어오는 건
+    그중 일부다. 매번 전체를 다시 임베딩하면 코퍼스에 비례해 느려지고,
+    그 시간 동안 API 는 옛 인덱스를 물고 있다. 들어온 것만 넣으면 시간이
+    **하루치에 비례**한다.
+
+    바뀐 공고(차수가 올라 본문이 갈린 경우)는 doc_id 가 같으므로 지우고
+    다시 넣는다. 지우지 않고 더하면 같은 공고의 옛 청크와 새 청크가 함께
+    검색된다.
+
+    Args:
+        name: 테이블 이름.
+        chunks: 지금 청크 파일 전체의 Document 리스트.
+        embedder: **만들 때와 같은** 임베딩 객체. 도장으로 확인한다.
+        verbose: 진행 상황을 찍을지.
+
+    Returns:
+        (더한 문서 수, 지운 문서 수, 그대로 둔 문서 수).
+    """
+    store = load_store(name, embedder)  # 여기서 모델 도장을 검사한다
+    old = _doc_hashes(store.table)
+
+    texts = {}
+    for chunk in chunks:
+        texts.setdefault(str(chunk.metadata.get("doc_id") or ""), []).append(
+            chunk.page_content
+        )
+    new = {doc_id: _digest(t) for doc_id, t in texts.items()}
+
+    gone = [d for d in old if d not in new]
+    changed = [d for d in new if d in old and old[d] != new[d]]
+    added = [d for d in new if d not in old]
+    kept = len(new) - len(changed) - len(added)
+
+    if verbose:
+        print(f"{name}: 새 {len(added)}건 · 바뀜 {len(changed)}건 · "
+              f"빠짐 {len(gone)}건 · 그대로 {kept}건")
+
+    if gone or changed:
+        delete_docs(name, gone + changed)
+    todo = set(added) | set(changed)
+    if todo:
+        add_chunks(
+            name,
+            [c for c in chunks if str(c.metadata.get("doc_id") or "") in todo],
+            embedder,
+            verbose=verbose,
+        )
+
+    # 도장은 항상 다시 찍는다. 더하고 지운 게 없어도 청크 지문은 바뀔 수 있다.
+    was = json.loads(_stamp(name).read_text(encoding="utf-8"))
+    _write_stamp(name, was["model"], was["dim"], chunks)
+    return len(added), len(gone), kept
+
+
 def list_stores():
     """만들어 둔 테이블 목록."""
     return sorted(_names(_db())) if settings.LANCEDB.exists() else []
@@ -316,6 +418,11 @@ def main():
     )
     parser.add_argument("--name", help="테이블 이름 (생략하면 청크이름__임베딩)")
     parser.add_argument("--force", action="store_true", help="이미 있어도 다시 만든다")
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="있는 테이블에 새/바뀐 공고만 반영 (전체 재임베딩 안 함)",
+    )
     args = parser.parse_args()
 
     import chunking
@@ -323,7 +430,12 @@ def main():
 
     chunks = chunking.load_chunks(args.chunks)
     name = args.name or f"{args.chunks}__{args.embed}"
-    store = build_store(chunks, load_embedder(args.embed), name=name, force=args.force)
+    embedder = load_embedder(args.embed)
+    if args.sync and name in _names(_db()):
+        sync_docs(name, chunks, embedder)
+        store = load_store(name, embedder)
+    else:
+        store = build_store(chunks, embedder, name=name, force=args.force)
 
     print(f"\n테이블 이름: {name}  ({len(store):,}행)")
     if name != cfg.index_name():
