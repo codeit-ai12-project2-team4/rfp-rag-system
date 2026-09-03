@@ -252,8 +252,14 @@ def check(build=False, service=False):
         stale = True
 
     if stale and build:
-        maker = "src/lance_store.py" if lance else "src/vectorstore.py"
-        ok = run(maker, "--chunks", chunks, "--force") and ok
+        # lance 는 이미 만들어진 테이블이 있으면 **새/바뀐 공고만** 다시 넣는다.
+        # 전체 재임베딩은 코퍼스에 비례해 느려지고, 그동안 API 는 옛 인덱스를
+        # 물고 있다. faiss 는 부분 갱신이 안 되니 늘 통째로 다시 만든다.
+        if lance and meta.exists():
+            ok = run("src/lance_store.py", "--chunks", chunks, "--sync") and ok
+        else:
+            maker = "src/lance_store.py" if lance else "src/vectorstore.py"
+            ok = run(maker, "--chunks", chunks, "--force") and ok
     elif stale:
         ok = False
 
