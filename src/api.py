@@ -251,7 +251,9 @@ def eval_upload(body: Upload):
     if not report["matched"]:
         raise HTTPException(400, {
             "message": "정답 문서가 코퍼스에 하나도 없습니다. 이대로 돌리면 "
-                       "발췌가 전부 비어 0점이 나옵니다.",
+                       "발췌가 전부 비어 0점이 나옵니다. 세트에 evidence_text 가 "
+                       "있다면 검색 없이 잴 수 있습니다 — "
+                       "scripts/retrieval/contexts_from_evidence.py 를 보세요.",
             **report,
         })
 
