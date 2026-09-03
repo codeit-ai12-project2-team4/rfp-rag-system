@@ -39,9 +39,24 @@ def amounts(text):
 
 
 def main():
+    # 이름은 `.env` 의 DOCS 다. 하드코딩이 아니다 — 그런데 없다고만 하면
+    # 이름이 틀린 건지 파일이 없는 건지 알 수가 없다. 옆에 뭐가 있는지 같이 찍는다.
     path = settings.PROCESSED / f"{cfg.DOCS}.jsonl"
     if not path.exists():
         print(f"X 전처리본이 없습니다: {path}")
+        print(f"  (이름은 .env 의 DOCS={cfg.DOCS} 에서 옵니다)")
+        near = (
+            sorted(p.name for p in settings.PROCESSED.glob("*.jsonl"))
+            if settings.PROCESSED.exists()
+            else []
+        )
+        if near:
+            print(f"  {settings.PROCESSED} 에 있는 것: {near}")
+            print(
+                "  → .env 의 DOCS 를 이 중 하나로 맞추거나, prepare.py --build 로 만드세요"
+            )
+        else:
+            print(f"  {settings.PROCESSED} 가 비어 있습니다. prepare.py --build 부터.")
         return 1
 
     tally = Counter()
@@ -70,13 +85,17 @@ def main():
             mismatched.append((meta.get("사업명") or meta.get("source"), want, near))
 
     total = sum(tally.values())
-    print(f"문서 {total}건\n")
+    if not total:
+        # 0건인데 결론을 찍으면 "불일치 0건이니 넣어도 된다" 로 읽힌다.
+        print(f"X 전처리본이 비어 있습니다: {path}")
+        return 1
+    print(f"{path.name} · 문서 {total}건\n")
     for key in ("일치", "불일치", "본문없음", "CSV금액없음", "CSV금액이상"):
         if tally[key]:
             print(f"  {key:<10} {tally[key]:>4}건  ({tally[key] / total:.0%})")
 
     if mismatched:
-        print(f"\n불일치 예시 (앞 10건) — CSV 값 / 본문에서 가장 가까운 값들")
+        print("\n불일치 예시 (앞 10건) — CSV 값 / 본문에서 가장 가까운 값들")
         for title, want, near in mismatched[:10]:
             print(f"  {str(title)[:38]:<38} {want:>15,} ← {[f'{v:,}' for v in near]}")
 
