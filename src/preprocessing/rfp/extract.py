@@ -8,6 +8,7 @@ from pathlib import Path
 from preprocessing.rfp.clean import clean_text_verbose, strip_table_markup
 from preprocessing.rfp.common import FIELD_ALIASES, ExtractionResult
 from preprocessing.rfp.hwp import extract_hwp_document
+from preprocessing.rfp.hwpx import extract_hwpx_document
 from preprocessing.rfp.meta import extract_metadata
 from preprocessing.rfp.pdf import extract_pdf_document
 
@@ -22,6 +23,11 @@ def extract_document(path: Path) -> ExtractionResult:
 
     if suffix == ".hwp":
         return extract_hwp_document(path)
+
+    # hwpx 는 hwp 와 이름만 비슷하고 완전히 다른 파일이다 — OLE 가 아니라 zip+XML.
+    # 차세대 나라장터가 이걸 내려준다.
+    if suffix == ".hwpx":
+        return extract_hwpx_document(path)
 
     if suffix == ".pdf":
         return extract_pdf_document(path)

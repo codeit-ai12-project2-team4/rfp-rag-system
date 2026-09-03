@@ -49,7 +49,11 @@ HEADER = [
 # 첨부 10개 중 어느 게 제안요청서인가. 앞에 있을수록 우선.
 RFP_WORDS = ("제안요청서", "제안 요청서", "과업내용서", "과업 내용서",
              "과업지시서", "제안요청", "입찰설명서", "용역설명서")
-DOC_EXTS = (".hwp", ".hwpx", ".pdf", ".doc", ".docx")
+# **전처리가 읽을 수 있는 것만 받는다** (rfp/common.py 의 SUPPORTED_EXTENSIONS).
+# doc/docx 는 파이프라인이 못 읽는다 — 받아봐야 data/raw 에 쌓이기만 하고
+# 문서가 안 된다. 첨부가 그것뿐인 공고는 차라리 "첨부 못 찾음" 으로 세는 게
+# 낫다. 지원을 늘리려면 양쪽을 같이 고칠 것.
+DOC_EXTS = (".hwp", ".hwpx", ".pdf")
 
 
 def pick_attachment(item):

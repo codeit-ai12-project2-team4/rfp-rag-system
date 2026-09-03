@@ -123,6 +123,33 @@ from preprocessing.rfp import run_pipeline
 
 ---
 
+## `rfp/hwpx.py` 는 원본에 없던 파일이다 (2026-09-03)
+
+크롤러가 hwpx 를 받아오는데 `SUPPORTED_EXTENSIONS = {".hwp", ".pdf"}` 라서
+**조용히 버려지고 있었다.** 파일은 `data/raw` 에 쌓이고 CSV 에 행도 생기는데
+문서가 안 된다 — 오류도 안 난다.
+
+hwpx 는 차세대 나라장터가 내려주는 형식이라 앞으로 비중이 는다.
+**hwp 와 완전히 다른 파일이다** — hwp 는 OLE 복합문서(바이너리),
+hwpx 는 OWPML(zip 안에 XML). `hwp.py` 의 저수준 파서가 한 줄도 안 통한다.
+
+- 표 렌더러(`_is_keyvalue_table` · `_render_keyvalue` · `_render_matrix`)는
+  `hwp.py` 것을 그대로 쓴다. 그래야 두 형식이 같은 모양의 본문을 내놓고
+  `clean.py` 와 청킹이 어느 쪽인지 몰라도 된다
+- XML 이라 셀 주소를 복원할 필요가 없어서 **표가 오히려 hwp 보다 잘 나온다**
+- `python src/preprocessing/rfp/hwpx.py` 로 자체 검사
+
+자체 검사가 실제로 버그를 하나 잡았다: `iter()` 가 표 안까지 훑어서
+**셀 내용이 표로 한 번, 본문으로 또 한 번** 나왔다. 청크가 두 배로 부풀고
+검색이 같은 말을 두 번 센다. 표 안 `<hp:t>` 를 미리 표시해 걸러낸다.
+
+**아직 실제 hwpx 로 표유실률을 안 쟀다.** 병합 셀(colSpan/rowSpan)을 안 펴서
+병합이 많은 표는 열이 밀릴 수 있다. 새 공고를 받은 뒤
+`scripts/retrieval/eval_tables.py` 로 재고 필요하면 편다.
+
+`crawl.py` 의 `DOC_EXTS` 도 여기 맞춰 좁혔다 — doc/docx 는 파이프라인이 못
+읽으니 받아봐야 쌓이기만 한다. **두 목록은 항상 같이 고친다.**
+
 ## 안 쓰게 된 것
 
 | | 상태 |

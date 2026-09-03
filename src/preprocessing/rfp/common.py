@@ -27,7 +27,9 @@ HWP_EXTRACTION_METHODS = [
 HANGUL_MIN_RATIO = 0.15
 HANGUL_CHECK_CHARS = 5000
 
-SUPPORTED_EXTENSIONS = {".hwp", ".pdf"}
+# 크롤러가 받는 것과 **같아야 한다**. 여기 없는 확장자는 `run_pipeline` 이
+# 조용히 건너뛰어서, 파일은 data/raw 에 쌓이는데 문서가 안 된다.
+SUPPORTED_EXTENSIONS = {".hwp", ".hwpx", ".pdf"}
 
 
 # ============================================================
