@@ -65,6 +65,23 @@ def newer_raw(made):
                if f.is_file() and f.stat().st_mtime > cut)
 
 
+def titled(path):
+    """청크 몇 %가 사업명을 달고 있나. **CSV 병합이 조용히 실패하는 걸 잡는다.**
+
+    `merge_original_metadata` 는 파일명이 하나도 안 맞아도 예외를 안 낸다.
+    그러면 제목·발주기관·사업금액이 전부 비고, doc_id 는 `nofile-<해시>` 로
+    떨어진다. 검색은 멀쩡히 돌아가는데 목록 화면만 텅 빈다 — 2026-09-03 에
+    실제로 그랬다. VM 의 data_list.csv 에 원본 100건이 없었다.
+    """
+    rows = [json.loads(line) for line in open(path, encoding="utf-8")]
+    meta = lambda r: r.get("metadata") or r.get("meta") or {}
+    hit = sum(1 for r in rows if str(meta(r).get("사업명") or meta(r).get("title") or "").strip())
+    print(f"    사업명 있는 청크 {hit:,}/{len(rows):,} ({hit / len(rows):.0%})")
+    if hit < len(rows) * 0.9:
+        print(f"    ! data/metadata/data_list.csv 에 원본 파일명이 빠졌습니다")
+        print(f"      파일명이 안 맞으면 제목·금액이 통째로 빕니다")
+
+
 def check(build=False, service=False):
     """파생물 넷을 차례로 본다.
 
@@ -194,6 +211,7 @@ def check(build=False, service=False):
 
     if not path.exists():
         return False
+    titled(path)
 
     # 3. 인덱스. 모델까지 대조한다 — 차원이 같으면 faiss 가 안 죽는다.
     #
