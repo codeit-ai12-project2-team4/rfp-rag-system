@@ -177,6 +177,16 @@ def main():
              for p in pairs]
     print(f"특정형 {sum(named)}문항 · 일반형 {len(named) - sum(named)}문항")
 
+    # BM25 색인을 미리 지어 캐시에 넣는다. 안 그러면 **먼저 도는 Hybrid 행이
+    # 색인 구축 비용을 혼자 내고**, 뒤에 오는 조합은 공짜로 써서 시간 열이
+    # 거짓말을 한다. 9/4 첫 측정에서 Hybrid 377초 vs Hybrid(BM25+Splade) 221초로
+    # 벌어진 게 이것이다 — 검색 속도 차이가 아니었다.
+    from pieces import BM25
+
+    warm = time.time()
+    BM25(chunking.load_chunks(args.chunks), k=args.pool)
+    print(f"BM25 색인 준비 {time.time() - warm:.0f}초 (시간 열에서 뺀다)")
+
     rows = []
     splits = []
     for name, extra in setups.items():
