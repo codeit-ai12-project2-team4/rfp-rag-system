@@ -35,32 +35,27 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
     <tr align="center">
         <td><img src=".images/hs_image.png" width="120" height="120" style="border-radius:50%;"></td>
         <td><img src=".images/ch_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src="https://via.placeholder.com/120?text=%20" width="120" height="120" style="border-radius:50%;"></td>
         <td><img src=".images/ms_image.png" width="120" height="120" style="border-radius:50%;"></td>
         <td><img src=".images/jy_image.png" width="120" height="120" style="border-radius:50%;"></td>
     </tr>
     <tr align="center">
         <td><b>권혁상</b></td>
         <td><b>안찬형</b></td>
-        <td><b>이하람</b></td>
         <td><b>최민식</b></td>
         <td><b>최중열</b></td>
     </tr>
     <tr align="center">
         <td>
-            <img src="https://img.shields.io/badge/Data%20Engineer-E67E22?style=flat-square">
+            <img src="https://img.shields.io/badge/Data%20Engineer-E74C3C?style=flat-square">
         </td>
         <td>
-            <img src="https://img.shields.io/badge/Project%20Manager-2E8B57?style=flat-square">
-        </td>
-        <td>
-            <!-- 이하람  -->
+            <img src="https://img.shields.io/badge/Project%20Manager-9B59B6?style=flat-square">
         </td>
         <td>
             <img src="https://img.shields.io/badge/Generation%20Engineer-1E6FD9?style=flat-square">
         </td>
         <td>
-            <img src="https://img.shields.io/badge/Retrieval%20Engineer-9B59B6?style=flat-square">
+            <img src="https://img.shields.io/badge/Retrieval%20Engineer-2E8B57?style=flat-square">
         </td>
     </tr>
 </table>
