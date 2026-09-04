@@ -11,7 +11,7 @@ HOME=/home/spai1203
 # 업무시간에 3시간마다. 4시간을 되돌아봐서 **일부러 겹치게** 한다.
 # 겹쳐도 이미 가진 doc_id 는 건너뛰므로, 마지막 실행 시각을 적어둘 상태 파일이
 # 필요 없다. 상태 파일은 크론이 한 번 실패하면 그 구간이 영영 구멍으로 남는다.
-0 9-18/3 * * * cd $HOME/rfp-rag-system && .venv/bin/python src/crawl.py --hours 4 >> /tmp/crawl.log 2>&1
+0 12,15,18,21,0 * * * cd $HOME/rfp-rag-system && .venv/bin/python src/crawl.py --hours 4 >> /tmp/crawl.log 2>&1
 
 # 새벽에 이틀치를 다시 훑는다. 낮에 놓친 것(공고 수정·지연 등록)을 메운다.
 30 3 * * * cd $HOME/rfp-rag-system && .venv/bin/python src/crawl.py --days 2 >> /tmp/crawl.log 2>&1
