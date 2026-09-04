@@ -51,7 +51,8 @@ generation 파트에 넘길 때는 파일로 뽑는다. 그쪽은 TEI 도 인덱
     Hybrid+Rerank             0.919  0.919  0.919
     용어추가+Hybrid+Rerank      0.924  0.921  0.924   ← 채택
 
-    pool 80 (9/3, 30 → 80 이 그 주 최대 개선 +0.043)
+    pool 30 (9/4 재측정. 30·50·80 스윕에서 50→80 은 0.000, 30→50 은 +0.002.
+             80 은 폐기된 8/28 세트에서 고른 값이었다. 30 이 35% 빠르다)
     BM25 가중치 0.5 (0.7·0.9 와 동일 — RRF 는 어느 지점부터 순위가 포화)
     Splade 제외 (9/4·9/5 두 번 결정. 리랭커를 붙이면 -0.006, 운영 비용만 는다)
 
@@ -107,7 +108,7 @@ from config import retrieval as cfg
 from config import settings
 from evaluation import body, fit_budget
 from models import load_embedder, load_reranker
-from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
+from pieces import AddKeywords, BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
@@ -188,6 +189,9 @@ def retrieve(
     store, chunk_list, reranker = _load(index, chunks, embed, rerank)
     # BM25 는 같은 청크 묶음이면 색인을 돌려쓴다. 그래서 질문마다 만들어도 싸다.
     pipeline = Pipeline([
+        # 사전만 쓰는 질의 확장. 스윕에서 가중 MRR +0.007, 적중률 +0.011.
+        # 문서에는 9/8 에 "채택" 이라고 적혀 있었지만 코드에는 안 붙어 있었다.
+        AddKeywords(),
         Hybrid(
             [
                 Dense(store, k=pool, doc_ids=doc_ids),
