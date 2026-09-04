@@ -391,6 +391,7 @@ def search_notices(
     embed="tei",
     chunks=CHUNKS,
     rerank=None,
+    splade=None,
 ):
     """자연어로 공고를 찾는다. **1단계 — 어떤 공고를 볼지 고르는 화면.**
 
@@ -434,6 +435,9 @@ def search_notices(
         index: 인덱스 이름.
         embed: 임베딩 종류.
         chunks: BM25 가 쓸 청크 이름. None 이면 Dense 만 쓴다.
+        splade: 미리 만든 `Splade` 검색기. 주면 Dense 대신 이걸 BM25 와 섞는다
+            (9/4 에 잰 "방법 A" — 어휘 매칭 + 어휘 확장, Dense 를 안 쓴다).
+            만드는 게 비싸므로 부르는 쪽에서 한 번 만들어 넘긴다.
         rerank: 리랭커 종류 (tei / local). 주면 묶기 전에 다시 채점한다.
             기본은 끔 — 3초가 더 든다.
 
@@ -441,12 +445,20 @@ def search_notices(
         점수 순 공고 리스트.
         `[{doc_id, title, agency, budget, bid_close_at, summary, score, 청크수, excerpt}]`
     """
-    store = _store(index, embed)
-    searcher = Dense(store, k=pool)
-    if chunks:
-        searcher = Hybrid(
-            [searcher, BM25(chunking.load_chunks(chunks), k=pool)], k=pool, pool=pool
+    if splade is not None:
+        bm25 = BM25(chunking.load_chunks(chunks), k=pool) if chunks else None
+        searcher = (
+            Hybrid([bm25, splade], weights=[0.4, 0.6], k=pool, pool=pool)
+            if bm25 is not None
+            else splade
         )
+    else:
+        searcher = Dense(_store(index, embed), k=pool)
+        if chunks:
+            searcher = Hybrid(
+                [searcher, BM25(chunking.load_chunks(chunks), k=pool)],
+                k=pool, pool=pool,
+            )
     hits = searcher.search(query, pool)
     if rerank:
         hits = Rerank(load_reranker(rerank), k=pool)(
