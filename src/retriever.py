@@ -552,6 +552,51 @@ def build_context(chunks, budget=None, generation=True):
     return format_context(fit_context(chunks, budget, generation), generation)
 
 
+@lru_cache(maxsize=1)
+def _notices(chunks=None):
+    """doc_id → 공고 한 건. 청크 메타에서 한 번만 모은다.
+
+    **화면이 sessionStorage 에만 기대면 안 된다.** 지금 공고 화면은 목록에서
+    넘겨준 값을 세션에 담아 읽는데, 그러면 새로고침·주소 직접 입력·답변의
+    출처를 눌러 들어온 경우에 제목도 요약도 빈다. 실제로 "어떤 건 요약이
+    보이고 어떤 건 안 보인다" 로 나타났다. 서버가 주면 그 경우가 없어진다.
+
+    Args:
+        chunks: 청크 이름. 생략하면 config 기본값.
+
+    Returns:
+        dict: doc_id → `search_notices` 와 같은 모양의 dict.
+    """
+    found = {}
+    for chunk in chunking.load_chunks(chunks or CHUNKS):
+        doc_id = str(chunk.metadata.get("doc_id") or "")
+        if not doc_id or doc_id in found:
+            continue
+        meta = chunk.metadata
+        found[doc_id] = _drop_nan({
+            "doc_id": doc_id,
+            "title": _plain(meta.get("title")),
+            "agency": _plain(meta.get("agency")),
+            "budget": _plain(meta.get("budget")),
+            "budget_kind": _plain(meta.get("budget_kind")),
+            "bid_close_at": _plain(meta.get("bid_close_at")),
+            "summary": _plain(meta.get("summary")),
+            "score": 0.0,
+            "청크수": 0,
+            "excerpt": "",
+        })
+    for chunk in chunking.load_chunks(chunks or CHUNKS):
+        row = found.get(str(chunk.metadata.get("doc_id") or ""))
+        if row is not None:
+            row["청크수"] += 1
+    return found
+
+
+def notice(doc_id, chunks=None):
+    """공고 하나. 없으면 None."""
+    return _notices(chunks).get(str(doc_id))
+
+
 def sources(chunks):
     """인용 번호 → 공고 정보. 답변에 출처를 붙일 때 쓴다.
 

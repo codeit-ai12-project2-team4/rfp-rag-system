@@ -36,6 +36,7 @@ from config import MODEL_CONFIGS, settings
 import evalrun
 from evaluation import load_evalset
 from generation import generate_answer
+import retriever
 from retriever import (
     build_context,
     file_for,
@@ -169,6 +170,19 @@ def ask(body: Ask):
         history=body.history,
     )
     return {**result, "sources": sources(chunks)}
+
+
+@app.get("/notice/{doc_id}")
+def notice_one(doc_id: str):
+    """공고 한 건. 제목·기관·금액·마감·요약.
+
+    화면이 목록에서 넘겨준 값에만 기대면 새로고침·주소 직접 입력·답변의
+    출처를 눌러 들어온 경우에 전부 빈다. 여기로 물으면 그 경우가 없어진다.
+    """
+    found = retriever.notice(doc_id)
+    if found is None:
+        raise HTTPException(404, "그런 공고가 없습니다")
+    return found
 
 
 @app.get("/file/{doc_id}")
