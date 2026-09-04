@@ -625,6 +625,11 @@ def sources(chunks):
                 # 검색용 본문을 준다. 모델이 읽은 건 생성용(표 구조 유지)이지만
                 # 내용은 같고 표 마크업이 없어 사람이 읽기 좋다.
                 "excerpt": " ".join(chunk.page_content.split())[:400],
+                # **발췌 전체.** 400자만 주면 "더 보기" 를 눌러도 보여줄 게
+                # 없다. 근거를 끝까지 읽는 건 이 제품에서 선택 기능이 아니다 —
+                # 컨설턴트는 배점표 한 줄을 확인하려고 들어온다.
+                # 1,500자 × 8개 = 12KB 다. 한 번 더 부르는 것보다 싸다.
+                "text": " ".join(chunk.page_content.split()),
             }
         )
         for i, chunk in enumerate(chunks, 1)
