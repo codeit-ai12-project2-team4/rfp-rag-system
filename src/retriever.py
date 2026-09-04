@@ -583,7 +583,11 @@ def _notices(chunks=None):
             "summary": _plain(meta.get("summary")),
             "score": 0.0,
             "청크수": 0,
-            "excerpt": "",
+            # **요약이 없는 공고가 많다.** `사업 요약` 은 나라장터 API 에 없는
+            # 값이라 크롤러가 빈칸으로 둔다(처음 받은 100건만 사람이 넣었다).
+            # 그러면 공고 화면이 제목만 있고 텅 빈다. 본문 첫 대목이라도 준다 —
+            # 없는 값을 지어내는 것보다 원문 한 조각을 보여주는 게 맞다.
+            "excerpt": " ".join(chunk.page_content.split())[:400],
         })
     for chunk in chunking.load_chunks(chunks or CHUNKS):
         row = found.get(str(chunk.metadata.get("doc_id") or ""))

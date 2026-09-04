@@ -24,6 +24,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 import hmac
 import json
+import time
 import re
 from datetime import datetime
 
@@ -162,14 +163,24 @@ def search(body: Search):
 @app.post("/ask")
 def ask(body: Ask):
     """질문에 답한다. 발췌와 출처를 같이 준다 — 근거 없이 답만 주면 못 쓴다."""
+    # **검색과 생성을 나눠 잰다.** 합쳐서 "5초" 만 알면 어디를 줄여야 할지
+    # 모른다. `latency_sec` 은 생성 API 호출만 재므로 그 앞이 안 보였다.
+    started = time.time()
     chunks = retrieve(body.question, doc_ids=body.doc_ids)
+    search_sec = round(time.time() - started, 2)
+
     result = generate_answer(
         model_key=body.model,
         query=body.question,
         context=build_context(chunks),
         history=body.history,
     )
-    return {**result, "sources": sources(chunks)}
+    return {
+        **result,
+        "search_sec": search_sec,
+        "total_sec": round(time.time() - started, 2),
+        "sources": sources(chunks),
+    }
 
 
 @app.get("/notice/{doc_id}")
