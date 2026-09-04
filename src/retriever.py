@@ -552,6 +552,38 @@ def build_context(chunks, budget=None, generation=True):
     return format_context(fit_context(chunks, budget, generation), generation)
 
 
+def open_index(index, embed="tei", chunks=None):
+    """`STORE` 가 가리키는 저장소에서 인덱스를 연다. 없으면 None.
+
+    **스크립트마다 `from vectorstore import load_store` 를 하면 안 된다.**
+    `.env` 가 `STORE=lance` 인데 faiss 를 찾아서 "인덱스가 없습니다" 로 죽는다
+    (2026-09-03, `compare_retrieval.py`). 파생물은 `prepare.py` 가 lance 쪽에만
+    만들어 두므로, 그 사실을 아는 곳이 한 군데여야 한다.
+
+    Args:
+        index: 인덱스(테이블) 이름.
+        embed: 임베딩 종류.
+        chunks: 주면 faiss 쪽이 청크 지문까지 대조한다. lance 는 도장으로 본다.
+
+    Returns:
+        저장소 객체. 그 이름의 인덱스가 없으면 None.
+    """
+    from models import load_embedder
+
+    if cfg.STORE == "lance":
+        import lance_store
+
+        if index not in lance_store.list_stores():
+            return None
+        return lance_store.load_store(index, load_embedder(embed))
+
+    import vectorstore
+
+    if index not in vectorstore.list_stores():
+        return None
+    return vectorstore.load_store(index, load_embedder(embed), chunks)
+
+
 @lru_cache(maxsize=1)
 def _notices(chunks=None):
     """doc_id → 공고 한 건. 청크 메타에서 한 번만 모은다.

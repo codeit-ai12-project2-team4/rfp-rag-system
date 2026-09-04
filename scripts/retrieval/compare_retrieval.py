@@ -53,7 +53,7 @@ import build_evalset
 import chunking
 import evaluation as ev
 from config import settings
-from models import load_embedder, load_reranker
+from models import load_reranker
 from pieces import (
     BM25,
     AddKeywords,
@@ -64,8 +64,9 @@ from pieces import (
     Splade,
     SpladeModel,
 )
+from config import retrieval as cfg
 from preprocessing import load_documents
-from vectorstore import list_stores, load_store
+from retriever import open_index
 
 
 def build_setups(args):
@@ -81,17 +82,21 @@ def build_setups(args):
         `({설정 이름: 검색 함수}, [검색기 객체])`. 두 번째는 `--scoped` 에서
         공고 범위를 걸 때 쓴다.
     """
-    embedder = load_embedder(args.embed)
     searchers = []
     chunks = chunking.load_chunks(args.chunks)
     print(f"청크 {len(chunks):,}개 ({args.chunks})")
 
     # BM25 를 짓기 전에 본다. 뒤에서 터지면 몇 분을 버린다.
+    # **`STORE` 가 가리키는 쪽을 본다.** 예전엔 faiss 만 봐서, `.env` 가
+    # lance 인데 "인덱스가 없습니다" 로 죽었다 (2026-09-03).
     plain_index = f"{args.chunks}__{args.embed}"
-    if plain_index not in list_stores():
+    store = open_index(plain_index, args.embed, chunks)
+    if store is None:
+        maker = "src/lance_store.py" if cfg.STORE == "lance" else "src/vectorstore.py"
         sys.exit(
-            f"인덱스가 없습니다: {plain_index}\n"
-            f"  python src/vectorstore.py --chunks {args.chunks}"
+            f"인덱스가 없습니다: {plain_index}  (STORE={cfg.STORE})\n"
+            f"  python {maker} --chunks {args.chunks}\n"
+            f"  또는  python scripts/retrieval/prepare.py --build"
         )
 
     setups = {}
@@ -102,7 +107,7 @@ def build_setups(args):
     print(f"  BM25 인덱스 준비 {time.time() - t:.0f}초")
     setups["BM25"] = lambda q: bm25.search(q, args.pool)
 
-    dense = Dense(load_store(plain_index, embedder, chunks), k=args.pool)
+    dense = Dense(store, k=args.pool)
     searchers.append(dense)
     setups["Dense"] = lambda q: dense.search(q, args.pool)
 

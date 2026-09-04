@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 
 from config import settings
-from vectorstore import list_stores
+from retriever import open_index
 
 HERE = Path(__file__).parent
 
@@ -93,7 +93,7 @@ def main():
 
         ok = True
         for suffix in ("", "__header"):
-            if args.force or f"{name}{suffix}__{args.embed}" not in list_stores():
+            if args.force or open_index(f"{name}{suffix}__{args.embed}", args.embed) is None:
                 ok = run(
                     [
                         sys.executable,
