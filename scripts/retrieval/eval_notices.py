@@ -125,6 +125,9 @@ def main():
     )
     parser.add_argument("--rerank", default="tei", choices=["tei", "local"])
     parser.add_argument("--no-rerank", action="store_true", help="리랭커 설정을 뺀다")
+    parser.add_argument("--splade", action="store_true",
+                        help="Splade 행을 추가한다. npz 캐시가 있어야 한다")
+    parser.add_argument("--splade-model", default="telepix/PIXIE-Splade-v1.5")
     parser.add_argument("--out", default=str(settings.EVAL_RESULTS / "notices.csv"))
     args = parser.parse_args()
 
@@ -153,6 +156,16 @@ def main():
     if not args.no_rerank:
         setups["Dense+Rerank"] = {"chunks": None, "rerank": args.rerank}
         setups["Hybrid+Rerank"] = {"chunks": args.chunks, "rerank": args.rerank}
+
+    # Splade 는 1단계에서 한 번도 안 쟀다. 2단계에서 뺀 근거(리랭커가 이득을
+    # 먹는다)는 리랭커가 없는 이 화면에 그대로 안 온다.
+    if args.splade:
+        from pieces import Splade
+
+        splade = Splade(chunking.load_chunks(args.chunks), model=args.splade_model,
+                        k=args.pool, cache=args.chunks, verbose=True)
+        setups["Splade"] = {"chunks": None, "splade": splade}
+        setups["Hybrid(BM25+Splade)"] = {"chunks": args.chunks, "splade": splade}
 
     # 문항이 공고를 특정하는가. 청크 메타에서 정답 공고의 사업명·기관을 가져온다.
     titles = {}
