@@ -417,6 +417,60 @@ def eval_cancel(job_id: str):
     return {"stopped": evalrun.cancel(job_id)}
 
 
+# **경로를 요청으로 받지 않는다.** 이름만 받고 표에서 찾는다. 경로를 받으면
+# `../../.env` 같은 걸 막는 코드를 우리가 짜야 하는데, 그건 늘 한 군데가 빈다.
+LOG_FILES = {
+    "refresh": Path("/tmp/index.log"),  # 크론: 수집 → 전처리 → 색인 → 반영
+}
+
+
+@app.get("/logs")
+def log_list():
+    """볼 수 있는 로그 목록. 없는 파일도 있다고 적는다 — 그 자체가 상태다."""
+    return [
+        {
+            "name": name,
+            "exists": path.exists(),
+            "bytes": path.stat().st_size if path.exists() else 0,
+            "at": (
+                datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+                if path.exists()
+                else None
+            ),
+        }
+        for name, path in LOG_FILES.items()
+    ]
+
+
+@app.get("/logs/{name}")
+def log_tail(name: str, lines: int = 200):
+    """로그 끝 몇 줄. **ssh 없이 크론이 왜 실패했는지 보려고 만들었다.**
+
+    주간 회전이라 파일이 몇 MB 를 안 넘는다. 그래서 끝에서 되짚지 않고 그냥
+    다 읽어 마지막 N 줄만 남긴다 — 코드가 한 줄이고 틀릴 자리가 없다.
+
+    Args:
+        name: `LOG_FILES` 의 키.
+        lines: 마지막 몇 줄. 최대 2000.
+    """
+    from collections import deque
+
+    path = LOG_FILES.get(name)
+    if path is None:
+        raise HTTPException(404, f"그런 로그가 없습니다: {name}")
+    if not path.exists():
+        return {"name": name, "lines": [], "note": "아직 파일이 없습니다"}
+
+    with open(path, encoding="utf-8", errors="replace") as f:
+        tail = deque(f, maxlen=max(1, min(lines, 2000)))
+    return {
+        "name": name,
+        "at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+        "bytes": path.stat().st_size,
+        "lines": [line.rstrip("\n") for line in tail],
+    }
+
+
 @app.get("/health")
 def health():
     """무엇이 떠 있고 무엇을 보고 있는지.
@@ -453,4 +507,16 @@ def health():
         "store": cfg.STORE,
         "index": cfg.index_name(),
         "chunks": cfg.chunk_name(),
+        # **크론이 마지막으로 언제 어떻게 끝났나.** ssh 를 안 쓰는 사람이
+        # "지금 새 공고가 들어오고 있나" 를 물을 유일한 창구다.
+        "refresh": _refresh_stamp(),
     }
+
+
+def _refresh_stamp():
+    """`docker/refresh.sh` 가 남긴 마지막 결과. 없으면 None."""
+    path = settings.OUTPUTS / "refresh.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - 아직 한 번도 안 돌았을 수 있다
+        return None

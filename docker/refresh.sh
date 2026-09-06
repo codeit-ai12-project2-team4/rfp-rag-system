@@ -20,12 +20,22 @@ exec 9>/tmp/bidmate-refresh.lock
 flock -n 9 || { echo "[$(date '+%F %T')] 앞 실행이 아직 돌고 있어 건너뜁니다"; exit 0; }
 
 PY=.venv/bin/python
+STAMP=outputs/refresh.json
+
+# 어디서 끝났든 결과를 남긴다. ssh 가 없는 사람이 /health 로 확인할 수 있게.
+stamp() { printf '{"at":"%s","ok":%s,"step":"%s"}\n' "$(date -Is)" "$1" "$2" > "$STAMP"; }
+trap 'stamp false "$STEP"' ERR
+
+STEP=시작
 echo "[$(date '+%F %T')] refresh 시작  $*"
 
+STEP=수집
 "$PY" src/crawl.py "$@"
+STEP=전처리·색인
 "$PY" scripts/retrieval/prepare.py --build --service
 
 # 토큰은 .env 에서 꺼낸다. 값에 따옴표를 감싸 두면 그대로 헤더에 들어가 401 이 난다.
+STEP=반영
 TOKEN=$(grep '^API_TOKEN=' .env | cut -d= -f2-)
 if ! curl -fsS -X POST -H "x-api-token: $TOKEN" http://localhost:8010/reload; then
     echo
@@ -38,4 +48,5 @@ if ! curl -fsS -X POST -H "x-api-token: $TOKEN" http://localhost:8010/reload; th
 fi
 echo
 
+stamp true 끝
 echo "[$(date '+%F %T')] refresh 끝"
