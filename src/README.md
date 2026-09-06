@@ -81,9 +81,13 @@ retriever.py         질문 → 발췌. 밖으로 나가는 창구 (generation �
 generation.py        발췌 → 답변. OpenAI / HuggingFace
 chunking.py          documents.jsonl → 청크. section / recursive / semantic
 vectorstore.py       FAISS 인덱스 만들기·불러오기
+lance_store.py       FAISS 대신 LanceDB. vectorstore.py 와 같은 자리, STORE=lance 환경변수로 전환
 resources.py         메모리·디스크 감시 (VM 이 멈추는 걸 막는다)
+crawl.py             나라장터 입찰공고 수집 → data/metadata/data_list.csv, data/raw/
+evalrun.py           E2E 평가를 백그라운드로 돌리고 진행 상황을 outputs/eval_runs/<작업번호>.json 에 기록
+api.py               웹 UI 가 부르는 HTTP 경계. 자세한 내용은 아래 "api.py" 절 참고
 
-preprocessing/       원본 hwp · pdf → 본문 텍스트
+preprocessing/       원본 hwp · pdf → 본문 텍스트 (rfp/ 서브패키지 등 세부 구성은 preprocessing/README.md 참고)
   hwp.py               olefile 로 OLE 를 직접 읽어 문단만 (pyhwp 는 안 씀)
   hwp_table.py         표 구조까지 복원. RFP 는 글자의 60~80%가 표 안에 있다
   pdf.py               pdfplumber. 표 영역은 본문에서 빼고 따로 붙인다
@@ -95,12 +99,14 @@ models/              모델 붙이기. 부품 쪽 코드는 안 바뀐다
   embed.py             TEI(8085) / local / fake
   rerank.py            TEI(8086) / local / fake
   llm.py               openai / vllm(8087) / hf / echo
+  sglang.py            SGLang 생성 서버 컨테이너 교체 (ensure() — 한 번에 한 모델만)
   health.py            check_servers() — 뭐가 떠 있는지 한눈에
 
 pieces/              retriever.py 가 쓰는 검색 부품. 갈아끼우며 A/B 하려고 나눠 뒀다
   base.py              Pipeline, State
   search.py            Dense · BM25 · Hybrid · FilterBy
   refine.py            Rerank · TopK · Widen
+  expand.py            검색 전 질문 다듬기 — QueryRewrite · MultiQuery
 
 evaluation/
   evalset.py           질문 세트 만들기·저장 (→ data/eval_qa.json)
