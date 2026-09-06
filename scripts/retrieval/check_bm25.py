@@ -43,7 +43,7 @@ def main():
                         help="증분 흉내: 새로 들어온 청크 수 (기본 300 ≈ 하루치)")
     args = parser.parse_args()
 
-    from pieces.search import korean_tokens_batch
+    from pieces import search as engine
     from rank_bm25 import BM25Okapi
 
     base = rss_mb()
@@ -54,16 +54,24 @@ def main():
     print(f"  청크 적재 후 RSS +{after_load - base:.0f}MB")
 
     # --- 1. 형태소 분석 -------------------------------------------------
+    # **`cached_tokens` 로 잰다.** 예전엔 `korean_tokens_batch` 를 직접 불러서
+    # 캐시를 통째로 건너뛰었고, 두 번 돌려도 시간이 똑같이 나왔다.
+    cache_path = engine._token_cache_path()
+    had_cache = cache_path.exists()
     started = time.time()
-    tokens = korean_tokens_batch(texts)
+    tokens = engine.cached_tokens(texts, verbose=True)
     tokenize_sec = time.time() - started
     after_tok = rss_mb()
 
     total_tokens = sum(len(t) for t in tokens)
     vocab = len(set(t for doc in tokens for t in doc))
-    print(f"\n1. 형태소 분석  {tokenize_sec:6.1f}초   RSS +{after_tok - after_load:.0f}MB")
+    state = "캐시 있음" if had_cache else "캐시 비어 있음 — 이번에 채운다"
+    print(f"\n1. 형태소 분석  {tokenize_sec:6.1f}초   RSS +{after_tok - after_load:.0f}MB"
+          f"   ({state})")
     print(f"   토큰 {total_tokens:,}개 · 청크당 평균 {total_tokens / len(tokens):.0f}개"
           f" · 어휘 {vocab:,}개")
+    if cache_path.exists():
+        print(f"   캐시 파일 {cache_path.stat().st_size / 1e6:.1f}MB")
 
     # --- 2. 색인 구축 ---------------------------------------------------
     started = time.time()
@@ -74,20 +82,39 @@ def main():
 
     share = tokenize_sec / (tokenize_sec + build_sec) * 100
     print(f"\n   → 전체 {tokenize_sec + build_sec:.1f}초 중 형태소 분석이 {share:.0f}%")
-    if share > 60:
-        print("   → 토큰을 캐시하면 그만큼이 사라진다. 엔진 교체는 그 다음 문제다.")
+
+    # --- 2b. 캐시가 실제로 얼마나 사는가 --------------------------------
+    # 메모리 캐시(같은 프로세스)와 디스크 캐시(재시작 뒤)를 나눠 잰다.
+    started = time.time()
+    engine.cached_tokens(texts)
+    warm_sec = time.time() - started
+
+    engine._TOKEN_CACHE = None  # 프로세스를 새로 띄운 셈 친다
+    started = time.time()
+    engine.cached_tokens(texts)
+    cold_sec = time.time() - started
+
+    print(f"\n2b. 캐시 적중")
+    print(f"   같은 프로세스 안       {warm_sec:6.1f}초")
+    print(f"   재시작 뒤(디스크에서)  {cold_sec:6.1f}초"
+          f"   ← 서버가 뜰 때 내는 실제 비용")
+    print(f"   + 색인 구축            {build_sec:6.1f}초")
+    print(f"   = 기동 {cold_sec + build_sec:.1f}초  (캐시 없을 때 {tokenize_sec + build_sec:.1f}초)")
 
     # --- 3. 증분 흉내 ---------------------------------------------------
     # 캐시가 있다고 치면, 새로 들어온 것만 형태소 분석하고 색인만 다시 짓는다.
-    new = texts[: args.add]
+    # 캐시에 없는 본문이어야 하므로 뒤에 표시를 붙여 새 청크처럼 만든다.
+    new = [t + f"\n[증분측정 {i}]" for i, t in enumerate(texts[: args.add])]
     started = time.time()
-    korean_tokens_batch(new)
+    engine.korean_tokens_batch(new)
     add_tok_sec = time.time() - started
     print(f"\n3. 증분 (새 청크 {args.add}건 가정)")
     print(f"   새 청크만 형태소 분석  {add_tok_sec:6.1f}초")
+    print(f"   + 캐시에서 나머지      {cold_sec:6.1f}초")
     print(f"   + 색인 전체 재구축     {build_sec:6.1f}초"
           f"   (IDF 가 코퍼스 전역이라 이건 남는다)")
-    print(f"   = {add_tok_sec + build_sec:.1f}초  (지금은 {tokenize_sec + build_sec:.1f}초)")
+    print(f"   = {add_tok_sec + cold_sec + build_sec:.1f}초"
+          f"  (캐시 없이 처음부터면 {tokenize_sec + build_sec:.1f}초)")
 
     # --- 4. 무중단 교체 비용 --------------------------------------------
     # 옛 인덱스가 요청을 받는 동안 새 인덱스를 만들어야 하므로 한동안 두 벌이다.
