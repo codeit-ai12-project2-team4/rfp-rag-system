@@ -27,7 +27,15 @@ echo "[$(date '+%F %T')] refresh 시작  $*"
 
 # 토큰은 .env 에서 꺼낸다. 값에 따옴표를 감싸 두면 그대로 헤더에 들어가 401 이 난다.
 TOKEN=$(grep '^API_TOKEN=' .env | cut -d= -f2-)
-curl -fsS -X POST -H "x-api-token: $TOKEN" http://localhost:8010/reload
+if ! curl -fsS -X POST -H "x-api-token: $TOKEN" http://localhost:8010/reload; then
+    echo
+    echo "  /reload 가 실패했습니다. 색인은 이미 만들어졌고 반영만 안 됐습니다."
+    echo "    404  API 가 옛 코드입니다 — git pull 후 한 번만 재시작하세요"
+    echo "    401  .env 의 API_TOKEN 값에 따옴표가 붙어 있는지 보세요"
+    echo "    7    API 가 안 떠 있습니다 (systemctl status bidmate-api)"
+    echo "  손으로 반영: sudo systemctl restart bidmate-api"
+    exit 1
+fi
 echo
 
 echo "[$(date '+%F %T')] refresh 끝"
