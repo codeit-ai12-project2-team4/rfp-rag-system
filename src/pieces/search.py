@@ -681,9 +681,12 @@ class BM25:
 
         from resources import need_memory
 
-        # 청크 1만 개당 0.85GB (9/9 실측: 11,449청크 = 948MB. 청크 본문 포함).
-        # 0.5 로 잡고 있었는데 33% 모자라 못 막고 있었다.
-        need_memory(max(1.0, len(chunks) / 10000 * 0.85), what="BM25 인덱스")
+        # 9/9 실측 (청크 본문 포함).
+        #   14,198청크 · 캐시 적중(Kiwi 안 올림)   487MB → 1만당 0.34GB
+        #   14,198청크 · 캐시 없음(Kiwi 올림)      950MB → 위 + 약 0.46GB
+        # 즉 **인덱스는 청크에 비례하고, Kiwi 는 붙었다 떨어지는 고정비**다.
+        # 새 청크가 하나라도 있으면 Kiwi 가 올라오므로 그쪽으로 잡는다.
+        need_memory(max(1.0, len(chunks) / 10000 * 0.35 + 0.5), what="BM25 인덱스")
 
         self.chunks = list(chunks)
         started = time.time()

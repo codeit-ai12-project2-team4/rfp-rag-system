@@ -99,7 +99,10 @@ def main():
     print(f"   재시작 뒤(디스크에서)  {cold_sec:6.1f}초"
           f"   ← 서버가 뜰 때 내는 실제 비용")
     print(f"   + 색인 구축            {build_sec:6.1f}초")
-    print(f"   = 기동 {cold_sec + build_sec:.1f}초  (캐시 없을 때 {tokenize_sec + build_sec:.1f}초)")
+    # 캐시가 이미 있던 실행에서는 tokenize_sec 자체가 적중 시간이라
+    # "캐시 없을 때" 로 쓰면 거짓말이 된다. 그때는 비교를 안 적는다.
+    was_cold = "" if had_cache else f"  (캐시 없을 때 {tokenize_sec + build_sec:.1f}초)"
+    print(f"   = 기동 {cold_sec + build_sec:.1f}초{was_cold}")
 
     # --- 3. 증분 흉내 ---------------------------------------------------
     # 캐시가 있다고 치면, 새로 들어온 것만 형태소 분석하고 색인만 다시 짓는다.
@@ -113,8 +116,8 @@ def main():
     print(f"   + 캐시에서 나머지      {cold_sec:6.1f}초")
     print(f"   + 색인 전체 재구축     {build_sec:6.1f}초"
           f"   (IDF 가 코퍼스 전역이라 이건 남는다)")
-    print(f"   = {add_tok_sec + cold_sec + build_sec:.1f}초"
-          f"  (캐시 없이 처음부터면 {tokenize_sec + build_sec:.1f}초)")
+    print(f"   = {add_tok_sec + cold_sec + build_sec:.1f}초{was_cold}")
+    print("   ※ 새 청크가 있으면 Kiwi 를 올려야 한다(+2~3초, RAM +약 460MB).")
 
     # --- 4. 무중단 교체 비용 --------------------------------------------
     # 옛 인덱스가 요청을 받는 동안 새 인덱스를 만들어야 하므로 한동안 두 벌이다.
