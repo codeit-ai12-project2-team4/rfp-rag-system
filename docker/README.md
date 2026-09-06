@@ -4,7 +4,7 @@ VM 한 대에 임베딩·리랭커·생성 세 가지를 다 올린다. L4 24GB 
 
 | 서버 | 포트 | 모델 | GPU 메모리 |
 |---|---|---|---|
-| 임베딩 (TEI) | **8085** | `dragonkue/BGE-m3-ko` | 약 1.3GB |
+| 임베딩 (TEI) | **8085** | `dragonkue/snowflake-arctic-embed-l-v2.0-ko` | 약 1.3GB |
 | 리랭커 (TEI) | **8086** | `dragonkue/bge-reranker-v2-m3-ko` | 약 1.3GB |
 | SPLADE (TEI) | **8084** | `telepix/PIXIE-Splade-v1.5` | 약 1GB |
 | 생성 (SGLang) | **8087** | 고른 모델 하나 | 4~19GB |
@@ -49,7 +49,7 @@ docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
 ## 임베딩·리랭커
 
 ```bash
-cd ~/proj-bid-mate/docker
+cd ~/rfp-rag-system/docker
 docker compose up -d
 docker compose logs -f          # 처음엔 모델 내려받느라 3~5분
 ```
@@ -295,7 +295,7 @@ sudo tee /etc/docker/daemon.json > /dev/null <<'EOF'
 { "dns": ["8.8.8.8", "1.1.1.1"] }
 EOF
 sudo systemctl restart docker
-cd ~/proj-bid-mate/docker && docker compose up -d
+cd ~/rfp-rag-system/docker && docker compose up -d
 ```
 
 > GCP VM 은 기본 DNS 가 `169.254.169.254`(메타데이터 서버)다. 이게 잘 도는데
@@ -305,7 +305,7 @@ cd ~/proj-bid-mate/docker && docker compose up -d
 
 ```bash
 pip install -U "huggingface_hub[cli]"
-HF_HOME=~/proj-bid-mate/docker/tei-cache \
+HF_HOME=~/rfp-rag-system/docker/tei-cache \
   hf download dragonkue/bge-reranker-v2-m3-ko
 docker compose up -d rerank
 ```
