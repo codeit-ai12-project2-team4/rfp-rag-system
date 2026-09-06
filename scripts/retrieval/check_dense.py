@@ -1,3 +1,9 @@
+# ── 삭제 예정 (2026-09-09) ─────────────────────────────────────
+# Dense MRR 0.003 을 좁히려고 만든 진단기. 원인(chunk_signature 가 본문만
+# 해시하던 것)은 9/3 에 고쳤고, 회귀는 check_incremental.py 가 잡는다.
+#
+# 되살릴 일이 생기면 이 주석을 지우고 근거를 적는다.
+
 """Dense 검색이 왜 안 되는지 20초로 좁힌다.  python scripts/retrieval/check_dense.py
 
 2026-09-03 eval_notices 에서 Dense MRR 0.003 · Top10 0.006 이 나왔다.
