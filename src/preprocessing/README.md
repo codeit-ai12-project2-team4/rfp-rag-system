@@ -5,10 +5,10 @@
 
 ```
 preprocessing/
-├── clean.py  hwp.py  hwp_table.py  pdf.py  toc.py  run.py   ← 검색 파트
+├── clean.py  hwp.py  hwp_table.py  pdf.py  toc.py  run.py  fields.py   ← 검색 파트
 ├── pipeline.py                                              ← 전처리팀 원본. 현재 비활성
 └── rfp/                                                     ← pipeline.py 를 나눈 것
-    ├── common.py  hwp.py  pdf.py  extract.py
+    ├── common.py  hwp.py  pdf.py  extract.py  hwpx.py
     ├── clean.py   meta.py chunk.py build.py
     └── __init__.py
 ```
