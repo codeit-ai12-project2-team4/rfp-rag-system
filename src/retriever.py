@@ -161,6 +161,38 @@ def _load(index, chunks, embed, rerank):
     return store, chunk_list, reranker
 
 
+def reload():
+    """청크 파일이 바뀐 것을 **무중단으로** 반영한다.
+
+    크론이 새 공고를 받아 전처리·색인을 끝낸 뒤 부른다. 예전에는 여기가
+    `systemctl restart bidmate-api` 였다 — `_load` 가 `lru_cache` 로 청크와
+    BM25 색인을 물고 있어서, 인덱스를 다시 만들어도 재시작 전까지 새 공고를
+    못 봤기 때문이다.
+
+    **데운 다음에 비운다. 순서가 반대면 무중단이 아니다.** 캐시를 먼저 비우면
+    그 직후에 들어온 요청 하나가 BM25 색인을 짓는 값을 혼자 낸다. 먼저 지어
+    `_BM25_CACHE` 에 넣어 두면, 비운 뒤 첫 요청은 그걸 그대로 집어 간다.
+
+    형태소 분석을 캐시하기 전에는 이게 3분이라 무중단이 성립하지 않았다
+    (9/9 실측: 185초 → 1.9초).
+
+    ponytail: 청크 이름(`CHUNKS`)은 import 때 읽은 값을 쓴다. **파일 내용이
+    바뀐 것만 반영되고 이름이 바뀌면 재시작해야 한다.** 크론은 같은 이름에
+    덧쓰므로 지금은 이걸로 충분하다. 코퍼스 버전을 올릴 때만 재시작한다.
+
+    Returns:
+        dict: `{"chunks": 청크 수, "sec": 걸린 초}`.
+    """
+    started = time.time()
+    chunks = chunking.load_chunks(CHUNKS)  # 디스크에서 새로 읽는다
+    BM25(chunks, k=POOL)  # 여기서 색인을 지어 캐시에 넣는다 — 비우기 전에
+    _load.cache_clear()
+    _store.cache_clear()
+    took = round(time.time() - started, 1)
+    print(f"[reload] 청크 {len(chunks):,}개 · {took}초")
+    return {"chunks": len(chunks), "sec": took}
+
+
 def retrieve(
     query,
     doc_ids=None,

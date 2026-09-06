@@ -8,6 +8,7 @@
     POST /search   자연어로 공고 찾기 (1단계 — 사람이 목록에서 고르는 화면)
     POST /ask      고른 공고 안에서 질문 (2단계 — 발췌 → 답변 → 출처)
     POST /ask/stream  같은 답을 토큰 단위로 (NDJSON. 체감 속도용)
+    POST /reload   새 청크를 무중단으로 반영 (크론이 부른다. 재시작 대신)
     GET  /file/{doc_id}  그 공고의 원본 RFP 내려받기
     GET  /health   무엇이 떠 있고 무엇을 보고 있는지 (Vercel 에서 열면 배선 전체가 보인다)
     GET  /models   드롭다운에 채울 모델 목록
@@ -157,6 +158,18 @@ def models():
         }
         for key, cfg in MODEL_CONFIGS.items()
     ]
+
+
+@app.post("/reload")
+def reload_index():
+    """새 청크를 무중단으로 반영한다. 크론이 색인을 끝낸 뒤 부른다.
+
+    **재시작을 대신한다.** 도는 동안 들어온 요청은 옛 인덱스로 정상 응답하고,
+    다 데운 뒤에야 갈아 끼운다. 토큰이 필요하다(감시용 `/health` 와 다르다).
+
+        curl -X POST -H "x-api-token: $API_TOKEN" localhost:8010/reload
+    """
+    return retriever.reload()
 
 
 @app.post("/search")
