@@ -62,6 +62,20 @@ MODEL_CONFIGS = {
         verbosity="medium",
         usd_per_call=0.0050,
     ),
+    # gpt-5 는 reasoning 토큰을 먼저 만들고 그동안 content 를 하나도 안 준다.
+    # 스트리밍을 붙여도 그 구간은 화면이 빈 채로 기다린다 — 전송 문제가 아니라
+    # 모델이 아직 안 쓰고 있는 것이다. "minimal" 은 그 구간을 거의 없앤다.
+    # **`mini` 를 안 고치고 옆에 둔다.** 지금까지의 E2E 점수가 medium 으로 잰
+    # 것이라, 값을 바꾸면 비교 대상이 사라진다. 둘 다 재고 나서 고른다.
+    # usd_per_call 은 medium 기준값을 그대로 뒀다 — reasoning 이 줄면 실제로는
+    # 더 싸므로 화면의 예상 비용은 과대평가다(모자란 것보다 낫다).
+    "mini-fast": ModelConfig(
+        provider="openai",
+        model="gpt-5-mini",
+        reasoning_effort="minimal",
+        verbosity="medium",
+        usd_per_call=0.0050,
+    ),
     "nano": ModelConfig(
         provider="openai",
         model="gpt-5-nano",
