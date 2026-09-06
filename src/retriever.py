@@ -382,7 +382,7 @@ def _plain(value):
 def search_notices(
     query,
     top_n=10,
-    pool=200,
+    pool=cfg.NOTICE_POOL,
     min_budget=None,
     max_budget=None,
     agency=None,
