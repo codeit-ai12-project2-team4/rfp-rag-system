@@ -7,6 +7,7 @@
 
     POST /search   자연어로 공고 찾기 (1단계 — 사람이 목록에서 고르는 화면)
     POST /ask      고른 공고 안에서 질문 (2단계 — 발췌 → 답변 → 출처)
+    POST /ask/stream  같은 답을 토큰 단위로 (NDJSON. 체감 속도용)
     GET  /file/{doc_id}  그 공고의 원본 RFP 내려받기
     GET  /health   무엇이 떠 있고 무엇을 보고 있는지 (Vercel 에서 열면 배선 전체가 보인다)
     GET  /models   드롭다운에 채울 모델 목록
@@ -30,13 +31,13 @@ from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from config import MODEL_CONFIGS, settings
 import evalrun
 from evaluation import load_evalset
-from generation import generate_answer
+from generation import generate_answer, stream_answer
 import retriever
 from retriever import (
     build_context,
@@ -183,6 +184,70 @@ def ask(body: Ask):
     }
 
 
+def _ndjson(obj):
+    """줄 하나. `ensure_ascii=False` 라야 한글이 \\uXXXX 로 안 부푼다."""
+    return json.dumps(obj, ensure_ascii=False) + "\n"
+
+
+@app.post("/ask/stream")
+def ask_stream(body: Ask):
+    """`/ask` 와 같은 답을 토큰 단위로 흘린다. 줄마다 JSON 하나(NDJSON).
+
+    **SSE 가 아니다.** `EventSource` 는 GET 만 되는데 이 요청은 본문이 필요해
+    POST 다. 브라우저는 어차피 `fetch` 로 읽으므로 SSE 의 `data:` 틀이 하는
+    일이 없다. 줄바꿈으로 나누는 게 파서도 세 줄이다.
+
+        {"type":"meta","search_sec":1.2,"sources":[...]}
+        {"type":"delta","text":"이 사업의 "}
+        {"type":"done","total_sec":6.1,"usage":{...}}
+        {"type":"error","error":"..."}      ← 나오면 마지막 줄이다
+
+    검색은 스트리밍이 아니다(리랭커가 다 봐야 순위가 난다). 그래서 `meta` 는
+    검색이 끝나는 순간 나가고, 화면은 그때 출처를 먼저 그릴 수 있다.
+    """
+    started = time.time()
+    chunks = retrieve(body.question, doc_ids=body.doc_ids)
+    search_sec = round(time.time() - started, 2)
+    context = build_context(chunks)
+    found = sources(chunks)
+
+    def lines():
+        yield _ndjson({"type": "meta", "search_sec": search_sec, "sources": found})
+        usage = None
+        gen_started = time.time()
+        try:
+            for piece in stream_answer(
+                body.model, body.question, context, body.history
+            ):
+                if "delta" in piece:
+                    yield _ndjson({"type": "delta", "text": piece["delta"]})
+                elif "error" in piece:
+                    yield _ndjson({"type": "error", "error": piece["error"]})
+                    return
+                else:
+                    usage = piece.get("usage")
+        except Exception as e:  # noqa: BLE001 - 조용히 끊으면 화면이 영원히 기다린다
+            yield _ndjson({"type": "error", "error": str(e)})
+            return
+        cfg = MODEL_CONFIGS.get(body.model)
+        yield _ndjson({
+            "type": "done",
+            # 화면이 이게 오기 전까지는 "만드는 중" 을 띄운다. 모델 이름이
+            # 곧 "끝났다" 는 신호다.
+            "model": cfg.model if cfg else None,
+            "usage": usage,
+            "latency_sec": round(time.time() - gen_started, 2),
+            "total_sec": round(time.time() - started, 2),
+        })
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        # 앞에 nginx 가 있으면 다 모아서 한 번에 보낸다 — 스트리밍이 사라진다.
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
 @app.get("/notice/{doc_id}")
 def notice_one(doc_id: str):
     """공고 한 건. 제목·기관·금액·마감·요약.
@@ -320,6 +385,19 @@ def eval_status(job_id: str):
     if job is None:
         raise HTTPException(404, "그런 작업이 없습니다")
     return job
+
+
+@app.post("/eval/{job_id}/cancel")
+def eval_cancel(job_id: str):
+    """돌던 평가를 멈춘다. 160문항 채점은 몇십 분이라 되돌릴 방법이 있어야 한다.
+
+    이미 끝났거나 없는 작업이면 `stopped: false` 다. 404 로 안 만드는 이유는,
+    화면이 마지막으로 본 상태와 서버가 다를 수 있어서다 — 그 사이에 끝났으면
+    "멈출 게 없다" 가 오류는 아니다.
+    """
+    if evalrun.read(job_id) is None:
+        raise HTTPException(404, "그런 작업이 없습니다")
+    return {"stopped": evalrun.cancel(job_id)}
 
 
 @app.get("/health")
