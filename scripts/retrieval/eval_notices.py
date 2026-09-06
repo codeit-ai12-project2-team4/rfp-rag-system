@@ -100,13 +100,19 @@ def score(pairs, top_n, named=None, **kwargs):
     """
     started = time.time()
     ranks = []
+    counts = []
     for i, pair in enumerate(pairs, 1):
         notices = retriever.search_notices(pair["question"], top_n=top_n, **kwargs)
         ranks.append(rank_of(notices, pair["doc_id"]))
+        counts.append(len(notices))
         print(f"  {i}/{len(pairs)}", end="\r")
     print(" " * 20, end="\r")
 
     out = metrics(ranks, top_n, time.time() - started)
+    # pool 은 **청크** 수다. 공고로 묶으면 그보다 적다. 이 값이 top_n 아래로
+    # 떨어지면 TopN 은 "N 개 중에 있나" 가 아니라 "나온 것 전부 중에 있나" 가
+    # 되어 pool 을 내릴수록 저절로 좋아 보인다. pool 을 정할 때 같이 본다.
+    out["공고수"] = round(sum(counts) / (len(counts) or 1), 1)
     if named:
         out["특정형"] = metrics([r for r, ok in zip(ranks, named) if ok], top_n)
         out["일반형"] = metrics([r for r, ok in zip(ranks, named) if not ok], top_n)
