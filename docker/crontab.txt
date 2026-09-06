@@ -23,22 +23,34 @@ HOME=/home/spai1203
 #
 # 새벽 크롤링이 끝난 뒤에 돈다(3:30 시작, 45분이면 넉넉). prepare.py 가
 # `--service` 라서 [1]전처리본 [2]청크 [3]인덱스까지만 본다. 평가 세트는
-# API 가 안 읽고, 없다고 ok=False 가 되면 `&&` 가 막혀 재시작이 안 된다.
+# API 가 안 읽고, 없다고 ok=False 가 되면 `&&` 가 막혀 반영이 안 된다.
+#
+# 청크는 `run_pipeline` 이 `cfg.CHUNKS` 경로에 직접 쓴다. `ingest.py` 를 따로
+# 부를 필요가 없다 — 그건 외부에서 받은 청크 파일을 가져올 때 쓰는 경로다.
 # 전처리본·청크·인덱스·평가세트를 순서대로 보고 없는 것만 만든다.
 # 새 공고가 없으면 전부 O 로 지나가고 몇 초에 끝난다.
 #
 # **STORE=lance 는 .env 에 있으므로 여기 안 적는다.** 두 군데 적으면 한쪽만
 # 고치게 된다. prepare.py 가 .env 를 읽어 lance 쪽만 검사·생성한다.
-45 3 * * * cd $HOME/rfp-rag-system && .venv/bin/python scripts/retrieval/prepare.py --build --service >> /tmp/index.log 2>&1 && sudo systemctl restart bidmate-api
+45 3 * * * cd $HOME/rfp-rag-system && .venv/bin/python scripts/retrieval/prepare.py --build --service >> /tmp/index.log 2>&1 && curl -fsS -X POST -H "x-api-token: $(grep '^API_TOKEN=' .env | cut -d= -f2-)" http://localhost:8010/reload >> /tmp/index.log 2>&1
 
 0 4 * * 0 : > /tmp/index.log
 
-# 재시작이 필요한 이유: API 가 인덱스를 lru_cache 로 물고 있어서, 새로 만들어도
-# 재시작 전에는 새 공고를 못 본다. 기동에 2분 반 걸리지만 새벽 3시 45분이다.
+# 왜 재시작이 아니라 /reload 인가 (9/9 변경)
 #
-# `sudo` 가 비밀번호를 물으면 크론이 멈춘다. 한 줄 허용해 둘 것:
-#   sudo visudo -f /etc/sudoers.d/bidmate
-#   spai1203 ALL=(root) NOPASSWD: /bin/systemctl restart bidmate-api
+# API 가 인덱스를 lru_cache 로 물고 있어서 새로 만들어도 그냥은 새 공고를 못 본다.
+# 전에는 그래서 `sudo systemctl restart` 를 붙였다. 기동에 2분 반이 걸렸는데,
+# 그 2분 반의 정체는 BM25 형태소 분석이었다. 결과를 본문 해시로 캐시하고 나서
+# **기동이 1.9초**가 됐고, 그러자 재시작할 이유가 없어졌다.
+#
+# /reload 는 새 청크로 BM25 를 **먼저 짓고 그 다음에** 캐시를 비운다. 도는 동안
+# 들어온 요청은 옛 인덱스로 정상 응답한다. sudo 도 필요 없다.
+#
+# 실패하면(-f 라서 4xx/5xx 에 0 이 아닌 코드) /tmp/index.log 에 남는다.
+# 그때는 손으로: sudo systemctl restart bidmate-api
+#
+# **청크 파일 이름(CHUNKS)을 바꿨을 때만** 재시작이 필요하다. import 때 읽은
+# 값을 쓰기 때문이다. 코퍼스 버전을 올릴 때 말고는 그럴 일이 없다.
 #
 # **증분이다.** 전처리는 지난번 전처리본을 캐시로 써서 새로 들어온 파일만
 # 다시 뽑고, 색인은 lance 테이블에 새/바뀐 공고만 넣는다(`--sync`). 그래서
