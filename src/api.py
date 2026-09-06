@@ -150,6 +150,10 @@ def models():
             "ready": cfg.provider != "sglang" or cfg.model == loaded,
             # 화면의 예상 비용이 이 값으로 계산된다. VM 모델은 0 이다.
             "usd_per_call": cfg.usd_per_call,
+            # **키가 달라도 model 이 같을 수 있다** — mini 와 mini-fast 는 둘 다
+            # gpt-5-mini 이고 reasoning_effort 만 다르다. 이걸 안 보내면
+            # 드롭다운에 같은 이름이 두 줄 뜬다. VM 모델은 None 이다.
+            "effort": cfg.reasoning_effort,
         }
         for key, cfg in MODEL_CONFIGS.items()
     ]
