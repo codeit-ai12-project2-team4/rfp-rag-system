@@ -1,3 +1,5 @@
+# config — 설정을 어디서 바꾸는지
+
 ## config 디렉토리 사용
 
 - settings.py
@@ -8,6 +10,53 @@
 
 - model_config.py
   - 내용: 모델별 설정(`MODEL_CONFIGS`)과 `ModelConfig` 자료형
+
+---
+
+## retrieval.py — 검색 설정의 단일 진실 공급원
+
+`config/retrieval.py`는 검색 파트(청킹·임베딩·벡터스토어·리랭커·평가) 실행에 쓰는 설정을 한 곳에 모아둔 파일이다. 파일 맨 위 주석에 적혀 있듯, 설정이 여러 곳에 흩어져서 한쪽만 고쳐진 탓에 같은 사고가 반복됐다 — 그래서 바꿀 때는 여기 하나만 고치는 걸 원칙으로 삼았다.
+
+**주의**: `config/__init__.py`는 `model_config.py`·`settings.py`만 재노출하고 `retrieval.py`는 포함하지 않는다. 그래서 `from config import DOCS`처럼 쓸 수 없고, 아래처럼 모듈을 직접 가져와야 한다.
+
+```python
+from config import retrieval
+
+retrieval.DOCS          # "cleaned_documents_v8"
+retrieval.CHUNKS        # "chunks_cleaned_documents_v8__pipeline_1500_250"
+retrieval.chunk_name()  # 인자를 안 주면 CHUNKS 를 그대로 돌려준다
+retrieval.index_name()  # f"{chunk_name()}__{EMBED}"
+```
+
+### 환경변수로 한 번만 덮어쓰기
+
+파일을 안 고치고 그대로 재보고 싶을 때 쓴다. `prepare.py`·`compare_retrieval.py`·`retriever.py`·`api.py`가 전부 이 값을 읽으므로, 한 번만 바꾸면 전체에 반영된다.
+
+```bash
+DOCS=cleaned_documents_v5 bash scripts/retrieval/nightly.sh
+DOCS=cleaned_documents_v5 SIZE=1200 python scripts/retrieval/prepare.py --build
+```
+
+| 변수 | 기본값 | 의미 |
+|---|---|---|
+| `DOCS` | `cleaned_documents_v8` | 전처리본 이름 |
+| `HOW` | `recursive` | 청킹 방식 |
+| `SIZE` / `OVERLAP` | `1500` / `250` | 청크 크기 · 겹침 |
+| `EMBED` | `tei` | 임베더 종류 |
+| `STORE` | `faiss` | 벡터 저장소 (`faiss` / `lance`) |
+| `RERANK` | `tei` | 리랭커 종류 |
+| `POOL` | `80` | 리랭커에 넘길 후보 수 |
+| `TOP_K` | `8` | 리랭커가 남길 최종 개수 (예산에서 다시 잘림) |
+| `EVALSET` | `eval_qa_both` | 평가에 쓸 평가셋 이름 |
+| `CHUNKS` | `chunks_cleaned_documents_v8__pipeline_1500_250` | 청크 세트 이름을 통째로 덮어쓸 때 (전처리팀이 이미 잘라서 준 경우) |
+
+### 이름이 곧 실험 조건이다
+
+`chunk_name()`과 `index_name()`은 전처리본·청킹 설정·임베더가 전부 이름 하나에 남게 만든다. `CHUNKS`가 지정돼 있으면 다른 인자를 뭘 줘도 그 값을 그대로 돌려준다 — `compare_chunking.py`·`sweep_chunks.py`처럼 설정을 바꿔 가며 도는 스크립트가 같은 이름으로 같은 인덱스를 보게 하기 위해서다.
+
+`CHUNKS`에 `pipeline`이 붙어 있으면 전처리팀 파이프라인이 자른 청크라는 뜻이다. `recursive`로 잘못 표기하면 나중에 `chunking.py`로 다시 잘라도 된다고 착각하기 쉬운데, 그러면 표 원자성과 검색용 길이 기준이 사라진다 — 오류 없이 성적만 조용히 달라진다.
+
+생성 파트의 모델 설정(`config/model_config.py`)과는 분리되어 있다.
 
 ---
 
