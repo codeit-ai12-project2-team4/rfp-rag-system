@@ -52,10 +52,14 @@ from config import settings  # noqa: E402
 LEVELS = [
     (1, re.compile(r"^[ \t]*([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ][.)]?[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
     (1, re.compile(r"^[ \t]*(제[ \t]*\d{1,2}[ \t]*[장절][ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
-    (2, re.compile(r"^[ \t]*(\d{1,2}[.)][ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
-    (3, re.compile(r"^[ \t]*([가-힣][.)][ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
+    # **마침표와 닫는 괄호를 섞지 않는다.** `\d[.)]` 로 뭉뚱그렸더니 `3)` 이
+    # 깊이 2와 4에 동시에 걸려 같은 제목이 경로에 두 번 찍혔다(9/10). 공문 체계는
+    # `1.` 과 `1)` 이 서로 다른 층이다.
+    (2, re.compile(r"^[ \t]*(\d{1,2}\.[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
+    (3, re.compile(r"^[ \t]*([가-힣]\.[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
     (4, re.compile(r"^[ \t]*(\d{1,2}\)[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
-    (5, re.compile(r"^[ \t]*(\([0-9가-힣]{1,2}\)[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
+    (5, re.compile(r"^[ \t]*([가-힣]\)[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
+    (6, re.compile(r"^[ \t]*(\([0-9가-힣]{1,2}\)[ \t]*\S[^\n]{0,38})[ \t]*$", re.M)),
 ]
 
 
@@ -144,42 +148,68 @@ def page_of(text, offset, entries):
 def main():
     parser = argparse.ArgumentParser(description="발췌 → 원문 위치를 말할 수 있나")
     parser.add_argument("--docs", default=cfg.DOCS, help="data/processed 의 전처리본")
-    parser.add_argument("--samples", type=int, default=20, help="문서당 찍어 볼 자리")
+    parser.add_argument("--chunks", default=cfg.CHUNKS, help="outputs/chunks 의 청크 이름")
     parser.add_argument("--show", type=int, default=2, help="예시로 보여줄 문서 수")
-    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    path = settings.PROCESSED / f"{args.docs}.jsonl"
-    docs = [json.loads(line) for line in path.open(encoding="utf-8") if line.strip()]
-    print(f"{path.name} · 문서 {len(docs)}건\n")
+    doc_path = settings.PROCESSED / f"{args.docs}.jsonl"
+    docs = {}
+    for line in doc_path.open(encoding="utf-8"):
+        if line.strip():
+            d = json.loads(line)
+            docs[d["metadata"].get("source")] = d["page_content"]
 
-    rng = random.Random(args.seed)
+    # **무작위 자리로 재지 않는다.** 진짜 발췌는 표지나 별지서식이 아니라
+    # 검색기가 돌려주는 청크에 몰려 있다. 9/10 에 형태소 캐시를 재던 경로가
+    # 그 캐시를 안 지나서 "효과 없음" 이 나온 적이 있다 — 같은 실수다.
+    chunk_path = settings.CHUNKS / f"{args.chunks}.jsonl"
+    chunks = [json.loads(line) for line in chunk_path.open(encoding="utf-8") if line.strip()]
+    print(f"{doc_path.name} 문서 {len(docs)}건 · {chunk_path.name} 청크 {len(chunks)}개\n")
+
+    cache = {}
     depths = Counter()
-    with_page = total = 0
-    per_doc = []
+    with_page = missing = total = 0
+    per_doc = Counter()
+    per_doc_deep = Counter()
 
-    for d in docs:
-        text = d["page_content"]
-        marks = headings(text)
-        entries = toc(text)
-        deep = 0
-        for _ in range(args.samples):
-            offset = rng.randrange(len(text)) if len(text) > 1 else 0
-            got = path_at(marks, offset)
-            depths[min(len(got), 4)] += 1
+    for c in chunks:
+        source = c["metadata"].get("source")
+        text = docs.get(source)
+        if text is None:
+            missing += 1
+            continue
+        if source not in cache:
+            cache[source] = (headings(text), toc(text))
+        marks, entries = cache[source]
+
+        # 청크 앞머리를 원문에서 찾는다. 전처리가 공백을 손봐서 못 찾는 경우가 있다.
+        head = c["page_content"][:60].strip()
+        offset = text.find(head) if head else -1
+        if offset < 0:
+            offset = text.find(head[:30]) if len(head) > 30 else -1
+        if offset < 0:
+            depths[-1] += 1
             total += 1
-            deep += len(got) >= 2
-            if entries and page_of(text, offset, entries):
-                with_page += 1
-        per_doc.append((deep / max(1, args.samples), d, marks, entries))
+            continue
+
+        got = path_at(marks, offset)
+        depths[min(len(got), 4)] += 1
+        total += 1
+        per_doc[source] += 1
+        per_doc_deep[source] += len(got) >= 2
+        if entries and page_of(text, offset, entries):
+            with_page += 1
 
     print("=" * 74)
-    print(f"① 아무 자리를 집었을 때 제목 경로가 나오나 ({total:,}자리)")
+    print(f"① 실제 청크 {total:,}개가 원문 어디인지 말할 수 있나")
     print("=" * 74)
+    if missing:
+        print(f"  (부모 문서를 못 찾은 청크 {missing}개는 뺐다)")
+    labels = {-1: "원문에서 못 찾음", 0: "제목 없음"}
     for n in sorted(depths):
-        label = "못 찾음" if n == 0 else f"{n}단계" + ("+" if n == 4 else " ")
+        label = labels.get(n) or f"{n}단계" + ("+" if n == 4 else " ")
         share = depths[n] / total * 100
-        print(f"  {label:<8} {depths[n]:>6}  {share:>5.1f}%  {'#' * round(share / 2)}")
+        print(f"  {label:<16} {depths[n]:>6}  {share:>5.1f}%  {'#' * round(share / 2)}")
     two_plus = sum(v for k, v in depths.items() if k >= 2) / total * 100
     one_plus = sum(v for k, v in depths.items() if k >= 1) / total * 100
     print(f"\n  1단계 이상  {one_plus:.1f}%")
@@ -196,26 +226,36 @@ def main():
     print("\n" + "=" * 74)
     print("② 실제로 어떻게 나오나")
     print("=" * 74)
-    per_doc.sort(key=lambda x: -x[0])
-    for rate, d, marks, entries in per_doc[: args.show] + per_doc[-1:]:
-        name = d["metadata"].get("사업명") or d["metadata"].get("source", "?")
-        text = d["page_content"]
-        print(f"\n[{str(name)[:46]}]  2단계 이상 {rate:.0%} · 제목 {len(marks)}개")
-        for share in (0.3, 0.6, 0.85):
-            offset = int(len(text) * share)
+    ranked = sorted(
+        per_doc, key=lambda s: -per_doc_deep[s] / max(1, per_doc[s])
+    )
+    for source in ranked[: args.show] + ranked[-1:]:
+        text = docs[source]
+        marks, entries = cache[source]
+        rate = per_doc_deep[source] / max(1, per_doc[source])
+        print(f"\n[{source[:52]}]  2단계 이상 {rate:.0%} · 제목 {len(marks)}개")
+        shown = 0
+        for c in chunks:
+            if c["metadata"].get("source") != source:
+                continue
+            head = c["page_content"][:60].strip()
+            offset = text.find(head)
+            if offset < 0:
+                continue
             got = path_at(marks, offset)
             span = page_of(text, offset, entries) if entries else None
-            where = " > ".join(got) if got else "(못 찾음)"
             tail = f"   [{span[0]}~{span[1]}쪽]" if span else ""
-            print(f"  {share:.0%} 지점 -> {where}{tail}")
+            print(f"  {' > '.join(got) if got else '(못 찾음)'}{tail}")
+            shown += 1
+            if shown == 3:
+                break
 
     print("\n" + "=" * 74)
     print("붙인다면")
     print("=" * 74)
-    print("제목 목록은 문서당 한 번만 뽑으면 된다. `prepare.py` 가 doc_id -> 제목")
-    print("목록을 json 으로 떨궈 두고 API 가 그걸 읽는다. **요청마다 20MB 원문을")
-    print("다시 파싱하지 않는다** — 9/10 에 1단계에서 겪었다(load_chunks).")
-    print("발췌 위치는 부모 문서에서 `text.find(발췌 앞 40자)` 로 잡는다.")
+    print("제목 목록은 문서당 한 번만 뽑으면 된다. `prepare.py` 가 청크마다 경로를")
+    print("미리 박아 두는 게 낫다 — 그러면 서빙이 원문을 아예 안 읽는다.")
+    print("요청마다 20MB 원문을 다시 파싱하는 건 9/10 에 이미 겪었다(load_chunks).")
 
 
 def demo():
@@ -240,6 +280,10 @@ def demo():
     # Ⅳ 로 넘어가면 Ⅰ 아래의 `1.`·`가.` 는 버려야 한다
     got = path_at(marks, text.index("2. 제안서 평가방법") + 50)
     assert got == ["Ⅳ. 입찰관련사항", "2. 제안서 평가방법"], got
+
+    # `3)` 이 깊이 2와 4에 동시에 걸리면 안 된다 — 같은 제목이 두 번 찍힌다
+    dup = headings("Ⅰ. 개요\n3) 사이트별 상세\n본문\n")
+    assert [d for _, d, _ in dup] == [1, 4], dup
 
     # 첫 제목 앞은 경로가 없다
     assert path_at(marks, 10) == [], path_at(marks, 10)
