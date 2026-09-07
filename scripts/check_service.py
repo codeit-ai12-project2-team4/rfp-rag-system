@@ -84,7 +84,9 @@ def call(path, body=None, stream=False):
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")[:300]
         if error.code == 401:
-            sys.exit(f"토큰이 틀립니다. RFP_TOKEN 또는 .env 의 API_TOKEN 을 보세요.\n  {detail}")
+            sys.exit(
+                f"토큰이 틀립니다. RFP_TOKEN 또는 .env 의 API_TOKEN 을 보세요.\n  {detail}"
+            )
         if error.code == 404:
             sys.exit(f"{path} 가 없습니다. VM 이 옛 코드일 수 있습니다.\n  {detail}")
         sys.exit(f"{error.code} {path}\n  {detail}")
@@ -136,6 +138,18 @@ def show(answer):
             title = (source.get("title") or "")[:42]
             print(f"    [{source['n']}] {title} · {source['chunk_id']}")
 
+            # --- **청크 원문 본문 출력 추가** ---
+            snippet = (
+                source.get("text") or source.get("content") or source.get("snippet")
+            )
+            if snippet:
+                # 줄바꿈 유지 및 읽기 쉬운 들여쓰기 서식
+                lines = snippet.strip().splitlines()
+                for line in lines:
+                    if line.strip():
+                        print(f"        | {line}")
+                print()  # 청크 간 구분을 위한 빈 줄
+
     # 답변이 실제로 인용을 달았는지, 없는 번호를 쓰지 않았는지.
     # 인용정확도를 손으로 확인하는 판이다.
     cited = {int(n) for n in re.findall(r"\[(\d+)\]", answer.get("answer") or "")}
@@ -143,7 +157,11 @@ def show(answer):
     bits = [f"발췌 {len(found)}", f"인용 {len(cited)}"]
     if ghost:
         bits.append(f"** 없는 번호 {sorted(ghost)}")
-    for key, label in (("search_sec", "검색"), ("latency_sec", "생성"), ("total_sec", "합")):
+    for key, label in (
+        ("search_sec", "검색"),
+        ("latency_sec", "생성"),
+        ("total_sec", "합"),
+    ):
         if answer.get(key) is not None:
             bits.append(f"{label} {answer[key]:.1f}초")
     if answer.get("model"):
@@ -267,7 +285,9 @@ def main():
     parser.add_argument("--eval", help="평가 한 바퀴. 세트 이름을 준다")
     parser.add_argument("--sets", action="store_true", help="쓸 수 있는 평가 세트 목록")
     parser.add_argument("--limit", type=int, help="평가를 앞에서 몇 문항만")
-    parser.add_argument("--no-judge", action="store_true", help="충실성 채점을 뺀다 (공짜)")
+    parser.add_argument(
+        "--no-judge", action="store_true", help="충실성 채점을 뺀다 (공짜)"
+    )
     args = parser.parse_args()
 
     if args.health:
