@@ -123,6 +123,10 @@ def main():
     # 화면에 표를 찍는 것 말고 값도 남긴다. UI 가 이걸 읽는다 —
     # 찍힌 표를 파싱하는 건 서식이 한 칸만 바뀌어도 깨진다.
     parser.add_argument("--json", dest="json_out", help="지표를 JSON 으로 저장")
+    # **판정을 행별로 남긴다.** 집계만 하면 "왜 떨어졌나"를 못 판다. 9/10 에
+    # 충실성 0.963 → 0.862 를 놓고 "답이 길어져서"를 의심했는데, 확인하려면
+    # 길이와 판정을 같이 봐야 했고 그때는 판정이 버려진 뒤였다.
+    parser.add_argument("--rows", help="문항별 길이·판정을 jsonl 로 저장")
     # 물러섬은 **점수가 아니라 비율이다.** 세트가 전부 answerable: true 면
     # 물러선 문항은 전부 오답이다. 그런데 그중에는 질문 자체가 답할 수 없는
     # 것이 섞여 있다 — 표에서 정규식으로 뽑다 보면 "C 업체가 왜 0점인가" 같은
@@ -147,7 +151,20 @@ def main():
 
         if args.judge:
             print(f"  {Path(path).name} 충실성 채점 중…")
-            for row, verdict in zip(rows, judge_all(rows, args.model)):
+            verdicts = judge_all(rows, args.model)
+            if args.rows:
+                out = Path(args.rows)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with out.open("w", encoding="utf-8") as f:
+                    for row, verdict in zip(rows, verdicts):
+                        f.write(json.dumps({
+                            "type": row.get("type"),
+                            "길이": len(row.get("answer") or ""),
+                            "충실성": None if verdict is None else float(verdict),
+                            "질문": (row.get("question") or "")[:60],
+                        }, ensure_ascii=False) + "\n")
+                print(f"문항별 판정 저장 → {out}")
+            for row, verdict in zip(rows, verdicts):
                 if verdict is not None:
                     by_type[row.get("type", "?")]["충실성"].append(float(verdict))
                     by_type["전체"]["충실성"].append(float(verdict))
