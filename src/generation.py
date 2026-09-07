@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import MAX_CONTEXT_CHARS, MODEL_CONFIGS, OPENAI_API_KEY, ModelConfig
+from config import settings
 
 # ---------------------------------------------------------------------------
 # 기본값 상수 모음 (팀 회의로 값이 바뀌면 이 블록만 수정하면 됩니다)
@@ -30,12 +31,34 @@ DEFAULT_MAX_TOKENS_HF = 512
 DEFAULT_JUDGE_MAX_TOKENS = 2000
 """ask()의 기본값. YES/NO 같은 짧은 채점용이라 작게 잡는다."""
 
-SYSTEM_PROMPT = """당신은 B2G 입찰 컨설팅 회사 입찰메이트의 RFP 분석 어시스턴트입니다.
-주어진 컨텍스트(RFP 문서 조각)만을 근거로 답변하세요.
-컨텍스트에 없는 내용은 "문서에서 확인되지 않습니다"라고 답하세요.
-불필요한 미사여구 없이 핵심만 정리해서 답변하세요.
-답변에서 특정 사실을 인용할 때는 그 근거가 된 컨텍스트 번호를 문장 끝에
-[1], [2]와 같은 형식으로 표기하세요."""
+SYSTEM_PROMPT_PATH = settings.ROOT / "config" / "prompts" / "system.md"
+"""답변 생성 프롬프트의 **정본**. 여기 말고 다른 데 적지 않는다."""
+
+
+def system_prompt() -> str:
+    """`config/prompts/system.md` 를 읽는다. **부를 때마다 읽는다.**
+
+    상수로 굳히지 않는 이유는 재시작이다. 모듈 상수로 두면 `.md` 를 고쳐도
+    프로세스를 다시 띄워야 반영된다 — 그럴 거면 `.py` 에 문자열로 두는 것과
+    같고, 파일만 하나 더 느는 셈이다. **매번 읽으면 다음 요청부터 바로 먹는다.**
+    무중단이고 `/reload` 도 필요 없다.
+
+    300바이트짜리 파일 하나다. 생성 한 번이 4초인데 이 읽기는 마이크로초라
+    캐시를 붙일 이유가 없다(붙이면 무효화 시점을 또 관리해야 한다).
+
+    원래는 이 문자열이 `generation.py` 에 박혀 있었고 `system.md` 는 아무도 안
+    읽는 사본이었다. 둘은 이미 어긋나 있었다 — 인용 규칙 문장이 달랐다.
+    `.md` 를 열어 고친 사람은 아무 일도 안 일어나는 걸 봤을 것이다.
+
+    `generate_answer` 와 `stream_answer` 가 둘 다 `_build_messages()` 를 지나므로
+    UI·평가·스크립트가 전부 이 한 값을 쓴다. `ask()` 의 `system` 인자는 LLM
+    채점용이라 별개다.
+
+    Returns:
+        str: 시스템 프롬프트. 파일이 없으면 `FileNotFoundError` 로 터진다 —
+        기본값을 두면 프롬프트가 조용히 달라진 채로 성적이 나온다.
+    """
+    return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def _result(
@@ -87,7 +110,7 @@ def _build_messages(
         OpenAI Chat Completions / HuggingFace chat template에 그대로 넣을 수 있는 메시지 리스트.
     """
     trimmed_context = context[:MAX_CONTEXT_CHARS]
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": system_prompt()}]
     if history:
         messages.extend(history)
     messages.append(
