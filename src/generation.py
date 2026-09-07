@@ -271,6 +271,115 @@ def _run_sglang(
     return (response.choices[0].message.content or "").strip(), usage
 
 
+def _stream_chat(cfg: ModelConfig, messages: list[dict]):
+    """OpenAI 규격 서버(openai·sglang)에서 토큰을 받아 흘린다.
+
+    두 provider 가 같은 SDK 를 쓴다. 다른 건 base_url 과 샘플링 인자뿐이라
+    `_run_openai`/`_run_sglang` 이 쓰는 값을 그대로 적었다 — 여기서 다른 값을
+    쓰면 **스트리밍 답과 한 번에 받은 답이 달라진다.**
+
+    Args:
+        cfg: 모델 설정.
+        messages: `_build_messages()` 결과.
+
+    Yields:
+        dict: `{"delta": str}` 여러 개, 마지막에 `{"usage": dict|None}`.
+    """
+    from openai import OpenAI
+
+    if cfg.provider == "sglang":
+        from models import sglang
+
+        sglang.ensure(cfg.model, mem=cfg.mem or "0.45", args=cfg.args)
+        client = OpenAI(base_url=f"{SGLANG_URL}/v1", api_key="local")
+        params = {
+            "model": cfg.model,
+            "messages": messages,
+            "max_tokens": cfg.max_new_tokens or DEFAULT_MAX_TOKENS_HF,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "extra_body": {"top_k": -1, "repetition_penalty": 1.0},
+        }
+        # ponytail: sglang 빌드에 따라 stream_options 를 안 받는다. usage 는
+        # 화면 비용 표시에 안 쓰이므로(usd_per_call 을 쓴다) 그냥 뺀다.
+        # 필요해지면 여기만 켜고 BadRequest 때 다시 빼면 된다.
+        extra = {}
+    else:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        params = {
+            "model": cfg.model,
+            "messages": messages,
+            "max_completion_tokens": DEFAULT_MAX_TOKENS_OPENAI,
+            "reasoning_effort": cfg.reasoning_effort,
+            "verbosity": cfg.verbosity,
+        }
+        # usage 는 마지막 청크에만 온다. 안 켜면 아예 안 준다.
+        extra = {"stream_options": {"include_usage": True}}
+
+    usage = None
+    for chunk in client.chat.completions.create(**params, stream=True, **extra):
+        if getattr(chunk, "usage", None):
+            usage = {
+                "input_tokens": chunk.usage.prompt_tokens,
+                "output_tokens": chunk.usage.completion_tokens,
+            }
+        if not chunk.choices:
+            continue
+        text = chunk.choices[0].delta.content
+        if text:
+            yield {"delta": text}
+    yield {"usage": usage}
+
+
+def stream_answer(
+    model_key: str,
+    query: str,
+    context: str,
+    history: list[dict] | None = None,
+):
+    """답을 토큰 단위로 흘린다. 체감 속도만 담당하고 내용은 안 바꾼다.
+
+    스트리밍이 막히면(조직 미인증, 서버 규격 미지원, 네트워크) **한 번에 받는
+    `generate_answer` 로 조용히 되돌아간다.** 화면 입장에서는 느릴 뿐 같은 답이
+    나오므로, 스트리밍 도입이 기존 경로를 깨뜨리지 않는다.
+
+    Args:
+        model_key: `MODEL_CONFIGS` 의 키.
+        query: 사용자 질문.
+        context: 발췌 컨텍스트.
+        history: 이전 대화 턴.
+
+    Yields:
+        dict: `{"delta": str}` 여러 개 뒤에 `{"usage": dict|None}` 하나.
+            시작도 못 하면 `{"error": str}` 하나만 나온다.
+    """
+    if model_key not in MODEL_CONFIGS:
+        yield {"error": f"등록되지 않은 model_key: {model_key}"}
+        return
+
+    cfg = MODEL_CONFIGS[model_key]
+    if cfg.provider in ("openai", "sglang"):
+        started = False
+        try:
+            for piece in _stream_chat(cfg, _build_messages(query, context, history)):
+                started = True
+                yield piece
+            return
+        except Exception as e:  # noqa: BLE001
+            if started:
+                # 이미 글자를 보냈다. 여기서 다시 부르면 답이 두 번 나온다.
+                yield {"error": f"생성이 중간에 끊겼습니다: {e}"}
+                return
+            print(f"[stream_answer] 스트리밍 실패, 한 번에 받는 쪽으로 되돌립니다: {e}")
+
+    result = generate_answer(model_key, query, context, history)
+    if not result["ok"]:
+        yield {"error": result["error"] or "생성에 실패했습니다"}
+        return
+    yield {"delta": result["answer"] or ""}
+    yield {"usage": result["usage"]}
+
+
 _PROVIDER_RUNNERS = {
     "openai": _run_openai,
     "sglang": _run_sglang,

@@ -7,6 +7,8 @@
 
     POST /search   자연어로 공고 찾기 (1단계 — 사람이 목록에서 고르는 화면)
     POST /ask      고른 공고 안에서 질문 (2단계 — 발췌 → 답변 → 출처)
+    POST /ask/stream  같은 답을 토큰 단위로 (NDJSON. 체감 속도용)
+    POST /reload   새 청크를 무중단으로 반영 (크론이 부른다. 재시작 대신)
     GET  /file/{doc_id}  그 공고의 원본 RFP 내려받기
     GET  /health   무엇이 떠 있고 무엇을 보고 있는지 (Vercel 에서 열면 배선 전체가 보인다)
     GET  /models   드롭다운에 채울 모델 목록
@@ -30,13 +32,13 @@ from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from config import MODEL_CONFIGS, settings
 import evalrun
 from evaluation import load_evalset
-from generation import generate_answer
+from generation import generate_answer, stream_answer
 import retriever
 from retriever import (
     build_context,
@@ -149,9 +151,25 @@ def models():
             "ready": cfg.provider != "sglang" or cfg.model == loaded,
             # 화면의 예상 비용이 이 값으로 계산된다. VM 모델은 0 이다.
             "usd_per_call": cfg.usd_per_call,
+            # **키가 달라도 model 이 같을 수 있다** — mini 와 mini-fast 는 둘 다
+            # gpt-5-mini 이고 reasoning_effort 만 다르다. 이걸 안 보내면
+            # 드롭다운에 같은 이름이 두 줄 뜬다. VM 모델은 None 이다.
+            "effort": cfg.reasoning_effort,
         }
         for key, cfg in MODEL_CONFIGS.items()
     ]
+
+
+@app.post("/reload")
+def reload_index():
+    """새 청크를 무중단으로 반영한다. 크론이 색인을 끝낸 뒤 부른다.
+
+    **재시작을 대신한다.** 도는 동안 들어온 요청은 옛 인덱스로 정상 응답하고,
+    다 데운 뒤에야 갈아 끼운다. 토큰이 필요하다(감시용 `/health` 와 다르다).
+
+        curl -X POST -H "x-api-token: $API_TOKEN" localhost:8010/reload
+    """
+    return retriever.reload()
 
 
 @app.post("/search")
@@ -181,6 +199,70 @@ def ask(body: Ask):
         "total_sec": round(time.time() - started, 2),
         "sources": sources(chunks),
     }
+
+
+def _ndjson(obj):
+    """줄 하나. `ensure_ascii=False` 라야 한글이 \\uXXXX 로 안 부푼다."""
+    return json.dumps(obj, ensure_ascii=False) + "\n"
+
+
+@app.post("/ask/stream")
+def ask_stream(body: Ask):
+    """`/ask` 와 같은 답을 토큰 단위로 흘린다. 줄마다 JSON 하나(NDJSON).
+
+    **SSE 가 아니다.** `EventSource` 는 GET 만 되는데 이 요청은 본문이 필요해
+    POST 다. 브라우저는 어차피 `fetch` 로 읽으므로 SSE 의 `data:` 틀이 하는
+    일이 없다. 줄바꿈으로 나누는 게 파서도 세 줄이다.
+
+        {"type":"meta","search_sec":1.2,"sources":[...]}
+        {"type":"delta","text":"이 사업의 "}
+        {"type":"done","total_sec":6.1,"usage":{...}}
+        {"type":"error","error":"..."}      ← 나오면 마지막 줄이다
+
+    검색은 스트리밍이 아니다(리랭커가 다 봐야 순위가 난다). 그래서 `meta` 는
+    검색이 끝나는 순간 나가고, 화면은 그때 출처를 먼저 그릴 수 있다.
+    """
+    started = time.time()
+    chunks = retrieve(body.question, doc_ids=body.doc_ids)
+    search_sec = round(time.time() - started, 2)
+    context = build_context(chunks)
+    found = sources(chunks)
+
+    def lines():
+        yield _ndjson({"type": "meta", "search_sec": search_sec, "sources": found})
+        usage = None
+        gen_started = time.time()
+        try:
+            for piece in stream_answer(
+                body.model, body.question, context, body.history
+            ):
+                if "delta" in piece:
+                    yield _ndjson({"type": "delta", "text": piece["delta"]})
+                elif "error" in piece:
+                    yield _ndjson({"type": "error", "error": piece["error"]})
+                    return
+                else:
+                    usage = piece.get("usage")
+        except Exception as e:  # noqa: BLE001 - 조용히 끊으면 화면이 영원히 기다린다
+            yield _ndjson({"type": "error", "error": str(e)})
+            return
+        cfg = MODEL_CONFIGS.get(body.model)
+        yield _ndjson({
+            "type": "done",
+            # 화면이 이게 오기 전까지는 "만드는 중" 을 띄운다. 모델 이름이
+            # 곧 "끝났다" 는 신호다.
+            "model": cfg.model if cfg else None,
+            "usage": usage,
+            "latency_sec": round(time.time() - gen_started, 2),
+            "total_sec": round(time.time() - started, 2),
+        })
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        # 앞에 nginx 가 있으면 다 모아서 한 번에 보낸다 — 스트리밍이 사라진다.
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/notice/{doc_id}")
@@ -322,6 +404,73 @@ def eval_status(job_id: str):
     return job
 
 
+@app.post("/eval/{job_id}/cancel")
+def eval_cancel(job_id: str):
+    """돌던 평가를 멈춘다. 160문항 채점은 몇십 분이라 되돌릴 방법이 있어야 한다.
+
+    이미 끝났거나 없는 작업이면 `stopped: false` 다. 404 로 안 만드는 이유는,
+    화면이 마지막으로 본 상태와 서버가 다를 수 있어서다 — 그 사이에 끝났으면
+    "멈출 게 없다" 가 오류는 아니다.
+    """
+    if evalrun.read(job_id) is None:
+        raise HTTPException(404, "그런 작업이 없습니다")
+    return {"stopped": evalrun.cancel(job_id)}
+
+
+# **경로를 요청으로 받지 않는다.** 이름만 받고 표에서 찾는다. 경로를 받으면
+# `../../.env` 같은 걸 막는 코드를 우리가 짜야 하는데, 그건 늘 한 군데가 빈다.
+LOG_FILES = {
+    "refresh": Path("/tmp/index.log"),  # 크론: 수집 → 전처리 → 색인 → 반영
+}
+
+
+@app.get("/logs")
+def log_list():
+    """볼 수 있는 로그 목록. 없는 파일도 있다고 적는다 — 그 자체가 상태다."""
+    return [
+        {
+            "name": name,
+            "exists": path.exists(),
+            "bytes": path.stat().st_size if path.exists() else 0,
+            "at": (
+                datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+                if path.exists()
+                else None
+            ),
+        }
+        for name, path in LOG_FILES.items()
+    ]
+
+
+@app.get("/logs/{name}")
+def log_tail(name: str, lines: int = 200):
+    """로그 끝 몇 줄. **ssh 없이 크론이 왜 실패했는지 보려고 만들었다.**
+
+    주간 회전이라 파일이 몇 MB 를 안 넘는다. 그래서 끝에서 되짚지 않고 그냥
+    다 읽어 마지막 N 줄만 남긴다 — 코드가 한 줄이고 틀릴 자리가 없다.
+
+    Args:
+        name: `LOG_FILES` 의 키.
+        lines: 마지막 몇 줄. 최대 2000.
+    """
+    from collections import deque
+
+    path = LOG_FILES.get(name)
+    if path is None:
+        raise HTTPException(404, f"그런 로그가 없습니다: {name}")
+    if not path.exists():
+        return {"name": name, "lines": [], "note": "아직 파일이 없습니다"}
+
+    with open(path, encoding="utf-8", errors="replace") as f:
+        tail = deque(f, maxlen=max(1, min(lines, 2000)))
+    return {
+        "name": name,
+        "at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+        "bytes": path.stat().st_size,
+        "lines": [line.rstrip("\n") for line in tail],
+    }
+
+
 @app.get("/health")
 def health():
     """무엇이 떠 있고 무엇을 보고 있는지.
@@ -358,4 +507,16 @@ def health():
         "store": cfg.STORE,
         "index": cfg.index_name(),
         "chunks": cfg.chunk_name(),
+        # **크론이 마지막으로 언제 어떻게 끝났나.** ssh 를 안 쓰는 사람이
+        # "지금 새 공고가 들어오고 있나" 를 물을 유일한 창구다.
+        "refresh": _refresh_stamp(),
     }
+
+
+def _refresh_stamp():
+    """`docker/refresh.sh` 가 남긴 마지막 결과. 없으면 None."""
+    path = settings.OUTPUTS / "refresh.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - 아직 한 번도 안 돌았을 수 있다
+        return None

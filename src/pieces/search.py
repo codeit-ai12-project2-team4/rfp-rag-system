@@ -87,6 +87,113 @@ def korean_tokens_batch(texts):
         return [korean_tokens(t) for t in texts]
 
 
+# 형태소 분석 결과를 디스크에 두고 돌려쓴다. 프로세스 안에서는 이 dict 가 받는다.
+_TOKEN_CACHE = None
+
+
+def _token_cache_path():
+    from config import settings
+
+    return settings.VECTORSTORE / "kiwi_tokens.json.gz"
+
+
+def _kiwi_version():
+    """토크나이저가 바뀌면 캐시를 통째로 버려야 한다. 토큰이 달라지기 때문."""
+    try:
+        import kiwipiepy
+
+        return f"kiwi-{getattr(kiwipiepy, '__version__', '?')}"
+    except ImportError:
+        return "split"
+
+
+def cached_tokens(texts, verbose=False):
+    """형태소 분석 결과를 **본문 해시로** 캐시한다. 새 본문만 자른다.
+
+    **BM25 색인 비용은 전부 여기다.** 11,449청크 실측에서
+
+        형태소 분석  177.8초
+        색인 구축      0.8초   ← IDF 는 코퍼스 전역이라 매번 다시 짓는다
+
+    100:0 이었다. "BM25 는 증분이 안 된다" 의 실체는 IDF 가 아니라, 청크가 하나
+    늘 때마다 **전부 다시 자르고 있던 것**이다. 색인 구축이 0.8초면 매번 다시
+    지어도 되므로 자체 증분 BM25 를 짤 이유가 없다 — 토큰만 캐시하면 끝난다.
+
+    청크 이름이 아니라 **본문 해시**로 찾는다. 그래야 청크 묶음이 v7 → v8 로
+    바뀌어도 안 바뀐 본문은 그대로 쓰고, 코퍼스가 달라도 같은 문서를 나눠 쓴다.
+
+    ponytail: 오래된 항목을 안 지운다. 코퍼스를 갈아엎을 때마다 파일이 는다.
+    항목이 `_TOKEN_CACHE_MAX` 를 넘으면 이번에 쓴 것만 남기고 다시 쓴다 —
+    다른 청크 묶음의 캐시가 같이 날아가지만, 그건 한 번 더 자르면 된다.
+
+    Args:
+        texts: 본문 리스트.
+        verbose: 적중/신규 개수를 찍을지.
+
+    Returns:
+        list[list[str]]: `texts` 와 같은 순서의 토큰 리스트.
+    """
+    global _TOKEN_CACHE
+
+    if _TOKEN_CACHE is None:
+        _TOKEN_CACHE = _load_token_cache()
+
+    digests = [hashlib.md5(t.encode()).hexdigest()[:16] for t in texts]
+    missing = [i for i, d in enumerate(digests) if d not in _TOKEN_CACHE]
+
+    if verbose:
+        print(f"토큰 캐시: 적중 {len(texts) - len(missing):,} · 새로 자를 것 {len(missing):,}")
+
+    if missing:
+        fresh = korean_tokens_batch([texts[i] for i in missing])
+        for i, tokens in zip(missing, fresh):
+            # 형태소는 공백을 안 품는다. 문자열 하나로 두면 JSON 이 훨씬 작고 빠르다.
+            _TOKEN_CACHE[digests[i]] = " ".join(tokens)
+        _save_token_cache(digests)
+
+    return [_TOKEN_CACHE[d].split() for d in digests]
+
+
+_TOKEN_CACHE_MAX = 60_000
+
+
+def _load_token_cache():
+    """없거나 토크나이저가 바뀌었으면 빈 것으로 시작한다."""
+    import gzip
+
+    path = _token_cache_path()
+    if not path.exists():
+        return {}
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            saved = json.load(f)
+    except Exception as error:  # noqa: BLE001 - 캐시가 깨졌다고 검색이 죽으면 안 된다
+        print(f"토큰 캐시를 못 읽었습니다({error}). 새로 만듭니다.")
+        return {}
+    if saved.get("tokenizer") != _kiwi_version():
+        print("토크나이저가 바뀌어 토큰 캐시를 버립니다.")
+        return {}
+    return saved.get("docs", {})
+
+
+def _save_token_cache(used):
+    """`used` 는 이번에 쓴 해시들. 파일이 너무 크면 이것만 남긴다."""
+    import gzip
+
+    global _TOKEN_CACHE
+    if len(_TOKEN_CACHE) > _TOKEN_CACHE_MAX:
+        keep = set(used)
+        _TOKEN_CACHE = {d: v for d, v in _TOKEN_CACHE.items() if d in keep}
+
+    path = _token_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with gzip.open(tmp, "wt", encoding="utf-8") as f:
+        json.dump({"tokenizer": _kiwi_version(), "docs": _TOKEN_CACHE}, f,
+                  ensure_ascii=False)
+    tmp.replace(path)  # 반쯤 쓰인 파일을 다음 실행이 읽는 일이 없게
+
+
 def has_kiwi():
     """형태소 분석기가 실제로 동작하는지 확인한다."""
     a = set(korean_tokens("시스템을 구축한다"))
@@ -115,6 +222,10 @@ def run_search(searcher, state):
         found.extend(searcher.search(query))
     state.chunks = dedup_chunks(found)
     state.note(f"질문 {len(state.queries)}개로 검색 → 청크 {len(state.chunks)}개")
+    # Hybrid 는 자식마다 따로 재 둔다. Pipeline 은 Hybrid 를 한 덩어리로 보므로
+    # 여기서 꺼내 올리지 않으면 Dense 와 BM25 중 어느 쪽이 비싼지 안 보인다.
+    for name, sec in getattr(searcher, "last_timings", []):
+        state.timings.append((f"  └ {name}", sec))
     return state
 
 
@@ -574,14 +685,22 @@ class BM25:
 
         from resources import need_memory
 
-        # 청크 1만 개당 대략 0.5GB. 없으면 만들기 전에 멈춘다.
-        need_memory(max(1.0, len(chunks) / 10000 * 0.5), what="BM25 인덱스")
+        # 9/9 실측 (청크 본문 포함).
+        #   14,198청크 · 캐시 적중(Kiwi 안 올림)   487MB → 1만당 0.34GB
+        #   14,198청크 · 캐시 없음(Kiwi 올림)      950MB → 위 + 약 0.46GB
+        # 즉 **인덱스는 청크에 비례하고, Kiwi 는 붙었다 떨어지는 고정비**다.
+        # 새 청크가 하나라도 있으면 Kiwi 가 올라오므로 그쪽으로 잡는다.
+        need_memory(max(1.0, len(chunks) / 10000 * 0.35 + 0.5), what="BM25 인덱스")
 
         self.chunks = list(chunks)
         started = time.time()
         if tokenizer is None:
-            tokenized = korean_tokens_batch([c.page_content for c in self.chunks])
+            tokenized = cached_tokens(
+                [c.page_content for c in self.chunks], verbose=verbose
+            )
         else:
+            # 직접 준 토크나이저는 캐시하지 않는다. 캐시 키가 본문 해시뿐이라
+            # 다른 토크나이저의 결과를 돌려주게 된다.
             tokenized = [tokenizer(c.page_content) for c in self.chunks]
         self.bm25 = BM25Okapi(tokenized)
         del tokenized
@@ -639,8 +758,14 @@ class Hybrid:
     def search(self, query, k=None):
         scores = {}
         found = {}
+        # 자식마다 따로 잰다. Hybrid 를 통째로 재면 Dense 와 BM25 중 어느
+        # 쪽이 비싼지 몰라, Splade 로 무엇을 대체해야 하는지도 못 정한다.
+        self.last_timings = []
         for searcher, weight in zip(self.searchers, self.weights, strict=False):
-            for rank, chunk in enumerate(searcher.search(query, self.pool), 1):
+            started = time.time()
+            hits = searcher.search(query, self.pool)
+            self.last_timings.append((type(searcher).__name__, time.time() - started))
+            for rank, chunk in enumerate(hits, 1):
                 key = chunk.metadata.get("chunk_id") or chunk.page_content[:120]
                 scores[key] = scores.get(key, 0.0) + weight / (self.rrf_k + rank)
                 found.setdefault(key, chunk)

@@ -35,7 +35,10 @@ EMBED = os.environ.get("EMBED", "tei")
 # (outputs/vectorstore vs outputs/lancedb).
 STORE = os.environ.get("STORE", "faiss")
 RERANK = os.environ.get("RERANK", "tei")
-POOL = int(os.environ.get("POOL", "80"))  # 리랭커에 넘길 후보 수. 30~120 을 재고 골랐다
+POOL = int(os.environ.get("POOL", "30"))  # 2단계. 리랭커에 넘길 후보 수 (9/4 스윕)
+# 1단계 공고 검색. 청크를 공고로 묶으므로 목록 길이는 이것보다 짧다.
+# 200 은 8/28 옛 세트에서 온 값이었고 9/4 스윕에서 전 구간 손해였다.
+NOTICE_POOL = int(os.environ.get("NOTICE_POOL", "20"))
 TOP_K = int(os.environ.get("TOP_K", "8"))  # 리랭커가 남길 수. 예산에서 다시 잘린다
 EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 

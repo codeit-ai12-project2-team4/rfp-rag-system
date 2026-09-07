@@ -52,12 +52,14 @@ class State:
     queries   실제로 검색에 쓸 질문들. 지금은 [question] 하나다.
     chunks    지금까지 모인 청크. 검색이 채우고 정제가 줄인다.
     log       부품마다 "내가 뭘 했는지" 한 줄씩. trace() 로 본다.
+    timings   부품마다 (이름, 초). **어디가 느린지 빼기로 알아내지 않게.**
     """
 
     question: str
     queries: list = field(default_factory=list)
     chunks: list = field(default_factory=list)
     log: list = field(default_factory=list)
+    timings: list = field(default_factory=list)
 
     def note(self, message):
         """부품이 한 일을 기록한다."""
@@ -89,6 +91,18 @@ class State:
         for line in self.log:
             print(" ", line)
 
+    def timing(self):
+        """부품마다 얼마나 걸렸는지. 합계도 같이.
+
+        **빼기로 알아내면 틀린다.** 전에 `Hybrid` 377초 vs
+        `Hybrid(BM25+Splade)` 221초를 검색 속도 차이로 읽었는데, 실제로는
+        먼저 도는 쪽이 BM25 색인을 짓고 있었다. 각 자리를 직접 잰다.
+        """
+        total = sum(sec for _, sec in self.timings) or 1e-9
+        for name, sec in self.timings:
+            print(f"  {name:22s} {sec:7.3f}초  {sec / total:5.1%}")
+        print(f"  {'합계':22s} {total:7.3f}초")
+
 
 def name_of(piece):
     """부품 이름. 클래스 이름을 그대로 쓴다. 상속이 없으니 이걸로 충분하다."""
@@ -102,12 +116,18 @@ class Pipeline:
         self.pieces = list(pieces)
 
     def run(self, question, verbose=False):
+        # 부품마다 시간을 남긴다. 한 곳에 붙여 두면 이걸 쓰는 실험 전부가
+        # 같이 얻는다 — 실험마다 스톱워치를 다시 짜지 않는다.
+        import time
+
         state = State(question=question, queries=[question])
         for piece in self.pieces:
+            started = time.perf_counter()
             state = piece(state)
+            state.timings.append((name_of(piece), time.perf_counter() - started))
             if verbose:
                 last = state.log[-1] if state.log else ""
-                print(f"[{name_of(piece)}] {last}")
+                print(f"[{name_of(piece)}] {state.timings[-1][1]:.3f}초  {last}")
         return state
 
     def __call__(self, question, verbose=False):

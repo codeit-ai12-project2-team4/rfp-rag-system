@@ -108,7 +108,7 @@ from config import retrieval as cfg
 from config import settings
 from evaluation import body, fit_budget
 from models import load_embedder, load_reranker
-from pieces import AddKeywords, BM25, Dense, Hybrid, Pipeline, Rerank, State
+from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
@@ -161,6 +161,40 @@ def _load(index, chunks, embed, rerank):
     return store, chunk_list, reranker
 
 
+def reload():
+    """청크 파일이 바뀐 것을 **무중단으로** 반영한다.
+
+    크론이 새 공고를 받아 전처리·색인을 끝낸 뒤 부른다. 예전에는 여기가
+    `systemctl restart bidmate-api` 였다 — `_load` 가 `lru_cache` 로 청크와
+    BM25 색인을 물고 있어서, 인덱스를 다시 만들어도 재시작 전까지 새 공고를
+    못 봤기 때문이다.
+
+    **데운 다음에 비운다. 순서가 반대면 무중단이 아니다.** 캐시를 먼저 비우면
+    그 직후에 들어온 요청 하나가 BM25 색인을 짓는 값을 혼자 낸다. 먼저 지어
+    `_BM25_CACHE` 에 넣어 두면, 비운 뒤 첫 요청은 그걸 그대로 집어 간다.
+
+    형태소 분석을 캐시하기 전에는 이게 3분이라 무중단이 성립하지 않았다
+    (9/9 실측: 185초 → 1.9초).
+
+    ponytail: 청크 이름(`CHUNKS`)은 import 때 읽은 값을 쓴다. **파일 내용이
+    바뀐 것만 반영되고 이름이 바뀌면 재시작해야 한다.** 크론은 같은 이름에
+    덧쓰므로 지금은 이걸로 충분하다. 코퍼스 버전을 올릴 때만 재시작한다.
+
+    Returns:
+        dict: `{"chunks": 청크 수, "sec": 걸린 초}`.
+    """
+    started = time.time()
+    # **먼저 비운다.** load_chunks 가 lru_cache 라 안 비우면 옛 청크를 돌려준다.
+    chunking.load_chunks.cache_clear()
+    chunks = chunking.load_chunks(CHUNKS)  # 디스크에서 새로 읽는다
+    BM25(chunks, k=POOL)  # 여기서 색인을 지어 캐시에 넣는다 — 비우기 전에
+    _load.cache_clear()
+    _store.cache_clear()
+    took = round(time.time() - started, 1)
+    print(f"[reload] 청크 {len(chunks):,}개 · {took}초")
+    return {"chunks": len(chunks), "sec": took}
+
+
 def retrieve(
     query,
     doc_ids=None,
@@ -188,10 +222,23 @@ def retrieve(
     """
     store, chunk_list, reranker = _load(index, chunks, embed, rerank)
     # BM25 는 같은 청크 묶음이면 색인을 돌려쓴다. 그래서 질문마다 만들어도 싸다.
+    # **용어추가(AddKeywords)를 뺐다 (9/10).** 가중 MRR +0.008 로 보였지만
+    # 노이즈 폭이 ±0.015 다. 부호는 6칸에서 일정했는데 전부 같은 평가 세트라
+    # 독립 시행이 아니다 — 같은 한두 문항이 매번 구제되면 6개 사건이 아니라
+    # 하나다. 성적으로는 못 가른다.
+    #
+    # 그래서 사전이 하는 일을 따로 쟀다(`check_keywords.py`, 177문항):
+    #
+    #     발동                 77문항 (44%)
+    #     붙인 낱말이 근거에 있음   55 (16%)
+    #     근거에 없음            287 (84%)   ← 후보를 흩뜨린다
+    #     `자격`·`벌금`          한 번도 안 걸림
+    #
+    # 넷 중 셋이 정답 근거에 없는 낱말이다. 사전을 코퍼스에서 뽑지 않고
+    # 짐작으로 썼기 때문이다. **성적이 아니라 메커니즘 때문에 뺀다.**
+    # 되살리려면 사전을 코퍼스에서 뽑고, 뽑을 때 쓴 문항과 잴 때 쓴 문항을
+    # 나눠야 한다. 부품(`pieces/expand.py`)은 남겨 둔다.
     pipeline = Pipeline([
-        # 사전만 쓰는 질의 확장. 스윕에서 가중 MRR +0.007, 적중률 +0.011.
-        # 문서에는 9/8 에 "채택" 이라고 적혀 있었지만 코드에는 안 붙어 있었다.
-        AddKeywords(),
         Hybrid(
             [
                 Dense(store, k=pool, doc_ids=doc_ids),
@@ -382,7 +429,7 @@ def _plain(value):
 def search_notices(
     query,
     top_n=10,
-    pool=200,
+    pool=cfg.NOTICE_POOL,
     min_budget=None,
     max_budget=None,
     agency=None,

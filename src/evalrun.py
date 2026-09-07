@@ -45,6 +45,40 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts" / "retrieval"
 # VM 모델(sglang)은 0 이다 — 우리 GPU 를 쓴다.
 
 
+# 취소는 파일이 아니라 메모리로 든다. 작업 스레드가 이 프로세스 안에 있으니
+# 굳이 디스크를 거칠 이유가 없고, 서버가 죽으면 스레드도 같이 죽어 sweep 이
+# "interrupted" 로 정리한다.
+_cancel = set()  # 멈춰 달라고 한 작업번호
+_procs = {}  # 작업번호 → 지금 돌고 있는 자식 프로세스
+
+
+class Cancelled(Exception):
+    """사용자가 멈춘 것. 실패와 구분해서 표시하려고 따로 둔다."""
+
+
+def cancel(job_id):
+    """돌고 있는 작업을 멈춘다. 자식 프로세스가 있으면 같이 끊는다.
+
+    발췌 단계는 `on_progress` 가 문항마다 불리므로 다음 문항에서 멈춘다.
+    답변·채점 단계는 자식 프로세스라 `terminate()` 로 끊는다 — 파이썬 쪽에서
+    플래그만 보게 하면 그 프로세스는 끝까지 돈다.
+
+    Args:
+        job_id: 작업번호.
+
+    Returns:
+        bool: 멈출 게 있었으면 True. 이미 끝난 작업이면 False.
+    """
+    job = read(job_id)
+    if not job or job.get("status") != "running":
+        return False
+    _cancel.add(job_id)
+    process = _procs.get(job_id)
+    if process and process.poll() is None:
+        process.terminate()
+    return True
+
+
 def _path(job_id):
     return RUNS / f"{job_id}.json"
 
@@ -242,6 +276,7 @@ def _stream(job, args, step):
         text=True, encoding="utf-8", errors="replace", env=env,
         cwd=str(SCRIPTS.parents[1]),
     )
+    _procs[job["id"]] = process
     last = 0.0
     for line in process.stdout:
         line = line.rstrip()
@@ -253,7 +288,11 @@ def _stream(job, args, step):
             _write(job)
             last = time.time()
     process.wait()
+    _procs.pop(job["id"], None)
     _write(job)
+    # 취소로 끊긴 프로세스도 0 이 아닌 코드로 끝난다. 먼저 본다.
+    if job["id"] in _cancel:
+        raise Cancelled(step)
     if process.returncode != 0:
         raise RuntimeError(f"{step} 가 코드 {process.returncode} 로 끝났습니다")
 
@@ -275,6 +314,8 @@ def _run(job):
         last = [0.0]
 
         def progress(done, total):
+            if job["id"] in _cancel:
+                raise Cancelled("발췌 뽑기")
             job["done"], job["total"] = done, total
             if time.time() - last[0] > 0.5:
                 _write(job)
@@ -309,11 +350,18 @@ def _run(job):
         job["metrics"] = json.loads(metrics.read_text(encoding="utf-8"))
         job["status"] = "done"
         job["step"] = "끝"
+    except Cancelled as where:
+        # 실패가 아니다. 빨간 글씨로 띄우면 뭐가 잘못된 줄 안다.
+        job["status"] = "cancelled"
+        job["step"] = "멈춤"
+        _log(job, f"사용자가 멈췄습니다 ({where})")
     except Exception as error:  # noqa: BLE001
         job["status"] = "failed"
         job["error"] = f"{type(error).__name__}: {error}"
         _log(job, f"X {job['error']}")
     finally:
+        _cancel.discard(job["id"])
+        _procs.pop(job["id"], None)
         dropped = _drop_upload(options["evalset"])
         if dropped:
             _log(job, f"업로드본 {dropped} 을 지웠습니다")
@@ -350,3 +398,28 @@ def sweep():
             job["error"] = "서버가 재시작되어 중단됐습니다"
             job["finished_at"] = time.time()
             _write(job)
+
+
+def _selfcheck():
+    """`python src/evalrun.py` — 취소 판정만 본다. 스레드는 안 띄운다.
+
+    끝난 작업을 멈췄다고 하거나, 도는 작업을 못 멈추면 화면의 버튼이
+    거짓말을 한다. 그 두 가지만 확인한다.
+    """
+    job_id = "selfcheck-0000"
+    try:
+        _write({"id": job_id, "status": "running"})
+        assert cancel(job_id) is True
+        assert job_id in _cancel
+
+        _write({"id": job_id, "status": "done"})
+        assert cancel(job_id) is False, "끝난 작업을 멈췄다고 한다"
+        assert cancel("없는번호") is False, "없는 작업을 멈췄다고 한다"
+    finally:
+        _cancel.discard(job_id)
+        _path(job_id).unlink(missing_ok=True)
+    print("cancel OK")
+
+
+if __name__ == "__main__":
+    _selfcheck()
