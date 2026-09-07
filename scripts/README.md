@@ -1,4 +1,6 @@
----
+# scripts — 평가셋 생성부터 로컬 채점, 전체 실행까지
+
+## 평가셋 생성 (`generator.py` / `sampler.py`)
 
 ### 1. `generator.py` (Golden Q&A 생성기)
 
@@ -42,7 +44,7 @@
 * **`eval_set_30.jsonl` (마무리 단계):** LLM-as-a-judge(Ragas)를 활용한 최종 답변 생성 품질 및 Faithfulness 채점용.
 ---
 
-골든셋을 만들어 넘길 때의 규격은 [`GOLDENSET.md`](GOLDENSET.md) 에 있다.
+골든셋을 만들어 넘길 때의 규격은 `GOLDENSET.md`에 정리할 예정이다 (아직 저장소에 없는 파일 — 작성 전까지는 위 `sample_benchmark_dataset()` 반환값 구조를 기준으로 삼는다).
 
 ---
 
