@@ -1,7 +1,7 @@
 """`AddKeywords` 사전의 **값(붙이는 낱말)** 을 코퍼스에서 뽑는다. 문항을 안 쓴다.
 
-    python scripts/retrieval/mine_keywords.py --chunks $CHUNKS
-    python scripts/retrieval/mine_keywords.py --chunks $CHUNKS --top 6 --write
+    python scripts/retrieval/mine_keywords.py
+    python scripts/retrieval/mine_keywords.py --top 6 --write
 
 9/10 에 용어추가를 되살렸지만 사전은 여전히 짐작으로 쓴 것이다. 남은 결함은
 `check_keywords.py` 가 잰 이것 하나다 — **붙인 낱말의 84%가 정답 근거에 없다.**
@@ -17,10 +17,8 @@
 문항을 나눌 필요 자체가 없어진다.
 
 이 스크립트는 사전을 고치지 않는다. 후보를 뽑아 보여주고 `--write` 로
-json 을 떨어뜨린다. 채택은 A/B 를 보고 사람이 한다.
-
-    python scripts/retrieval/compare_retrieval.py --chunks $CHUNKS --scoped \
-        --keywords outputs/reports/keywords_mined.json
+json 을 떨어뜨린다. 채택은 A/B 를 보고 사람이 한다. `--write` 가 마지막에
+A/B 명령을 청크 이름까지 채워서 찍어 준다.
 """
 
 import argparse
@@ -33,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
+from config import retrieval as cfg  # noqa: E402
 from config import settings  # noqa: E402
 from pieces.expand import AddKeywords  # noqa: E402
 from pieces.search import cached_tokens, korean_tokens  # noqa: E402
@@ -147,7 +146,11 @@ def mine(chunk_tokens, synonyms, doc_freq, total, top, min_docs, lo, hi):
 
 def main():
     parser = argparse.ArgumentParser(description="AddKeywords 사전의 값을 코퍼스에서 뽑는다.")
-    parser.add_argument("--chunks", required=True, help="outputs/chunks 의 청크 이름")
+    # 안 주면 서버가 쓰는 것과 **같은 청크**를 쓴다. `.env` 의 CHUNKS 다.
+    # 이름을 손으로 적으면 서버는 v8 을 보는데 실험은 v7 을 보는 일이 생긴다.
+    parser.add_argument(
+        "--chunks", default=cfg.CHUNKS, help=f"청크 이름 (기본: .env 의 {cfg.CHUNKS})"
+    )
     parser.add_argument("--top", type=int, default=5, help="키마다 남길 낱말 수")
     parser.add_argument("--min-docs", type=int, default=20, help="후보의 최소 등장 청크 수")
     parser.add_argument("--lo", type=float, default=0.002, help="전체 df 비율 아래 문")
@@ -162,7 +165,7 @@ def main():
 
     chunks = chunking.load_chunks(args.chunks)
     texts = [c.page_content for c in chunks]
-    print(f"청크 {len(texts)}개 · 형태소 분석 (캐시가 있으면 몇 초)\n")
+    print(f"{args.chunks} · 청크 {len(texts)}개 · 형태소 분석 (캐시가 있으면 몇 초)\n")
     chunk_tokens = cached_tokens(texts, verbose=True)
 
     total = len(chunk_tokens)
@@ -192,6 +195,8 @@ def main():
         print(f"\n→ {out}")
         print("  A/B:  python scripts/retrieval/compare_retrieval.py "
               f"--chunks {args.chunks} --scoped --keywords {out}")
+        # 청크 이름을 그대로 찍어 준다. compare_retrieval 은 --chunks 가 필수라
+        # 여기서 복사해 붙이면 두 스크립트가 같은 코퍼스를 본다.
 
 
 def demo():
