@@ -38,6 +38,7 @@
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -166,6 +167,16 @@ def build_setups(args):
         keyword_pipe = Pipeline([AddKeywords(), hybrid, Rerank(reranker, k=args.pool)])
         setups["용어추가+Hybrid+Rerank"] = lambda q: keyword_pipe(q).chunks
 
+        # 코퍼스에서 뽑은 사전(mine_keywords.py)을 같은 자리에 끼워 나란히 잰다.
+        # 손으로 쓴 사전과 **한 실행 안에서** 겨뤄야 한다. 따로 돌리면 그 사이
+        # 크론이 청크를 늘려서 두 성적이 다른 코퍼스 것이 된다(9/10 에 겪었다).
+        if args.keywords:
+            mined = json.loads(Path(args.keywords).read_text(encoding="utf-8"))
+            mined_pipe = Pipeline([
+                AddKeywords(mined), hybrid, Rerank(reranker, k=args.pool)
+            ])
+            setups["용어추가(채굴)+Hybrid+Rerank"] = lambda q: mined_pipe(q).chunks
+
         # Splade 조합을 리랭커에 태운다. 후보를 만드는 쪽이 바뀌면 리랭커가
         # 볼 30개가 바뀌므로, 리랭커 없이 잰 순위는 그대로 가지 않는다.
         if bm25_splade is not None:
@@ -275,6 +286,10 @@ def main():
         help="Hybrid 의 BM25 비중들. 쉼표로 구분",
     )
     parser.add_argument("--no-rerank", action="store_true", help="리랭커를 빼고 잰다")
+    parser.add_argument(
+        "--keywords",
+        help="mine_keywords.py 가 뽑은 사전 json. 손으로 쓴 사전과 나란히 잰다",
+    )
     parser.add_argument(
         "--splade",
         action="store_true",
