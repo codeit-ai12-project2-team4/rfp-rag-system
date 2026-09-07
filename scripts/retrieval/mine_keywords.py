@@ -1,7 +1,8 @@
 """`AddKeywords` 사전의 **값(붙이는 낱말)** 을 코퍼스에서 뽑는다. 문항을 안 쓴다.
 
-    python scripts/retrieval/mine_keywords.py
-    python scripts/retrieval/mine_keywords.py --top 6 --write
+    python scripts/retrieval/mine_keywords.py            # 진단 + 가지치기
+    python scripts/retrieval/mine_keywords.py --write    # 가지친 사전을 json 으로
+    python scripts/retrieval/mine_keywords.py --mine     # 채굴도 본다(참고용)
 
 9/10 에 용어추가를 되살렸지만 사전은 여전히 짐작으로 쓴 것이다. 남은 결함은
 `check_keywords.py` 가 잰 이것 하나다 — **붙인 낱말의 84%가 정답 근거에 없다.**
@@ -16,9 +17,20 @@
 못 믿는다. 코퍼스만 쓰면 **177문항이 전부 시험지로 남는다.** 뽑을 문항과 잴
 문항을 나눌 필요 자체가 없어진다.
 
-이 스크립트는 사전을 고치지 않는다. 후보를 뽑아 보여주고 `--write` 로
-json 을 떨어뜨린다. 채택은 A/B 를 보고 사람이 한다. `--write` 가 마지막에
-A/B 명령을 청크 이름까지 채워서 찍어 준다.
+**채굴(②)은 해 봤고 안 됐다.** 1500자 청크는 주제 슬라이스로 못 쓴다 —
+`배정예산` 이 든 청크의 나머지 95%는 딴 얘기라, "슬라이스에만 있는 낱말" 이
+`상호출자제한기업집단`·`공매도` 같은 법령 상용구로 채워진다. `--mine` 으로
+남겨는 뒀다. 근거는 배수 열이다. 값이 여러 후보에서 똑같으면(`*` 표시)
+그건 `N ÷ 슬라이스` 로 포화한 것이고 순위가 아예 없다는 뜻이다.
+
+**그래서 실제로 쓰는 건 가지치기(③)다.** 새 낱말을 지어내는 대신 ①에서
+죽은 것으로 나온 낱말을 뺀다. `사업`(59%)·`사항`(64%) 같은 것들인데, 정답을
+끌어오지도 못하면서 그 낱말이 든 엉뚱한 청크는 끌어온다. 잰 결함(84%)의
+정체가 대부분 이거다.
+
+이 스크립트는 사전을 고치지 않는다. `--write` 로 json 만 떨어뜨리고, 채택은
+A/B 를 보고 사람이 한다. `--write` 가 마지막에 A/B 명령을 청크 이름까지
+채워서 찍어 준다.
 """
 
 import argparse
@@ -42,7 +54,7 @@ def idf(df, total):
     return math.log((total - df + 0.5) / (df + 0.5) + 1)
 
 
-def diagnose(synonyms, doc_freq, total):
+def diagnose(synonyms, doc_freq, total, dead_share):
     """지금 사전의 낱말이 BM25 에서 실제로 힘을 갖는지 본다.
 
     함정 하나를 먼저 드러낸다. 사전에는 `과업기간` 이라고 적혀 있지만 질의도
@@ -65,7 +77,7 @@ def diagnose(synonyms, doc_freq, total):
                 score = idf(df, total)
                 if df == 0:
                     verdict, dead = "코퍼스에 없음", dead + 1
-                elif share > 30:
+                elif share > dead_share * 100:
                     verdict, dead = "죽음 — 너무 흔해 IDF≈0", dead + 1
                 elif df < 5:
                     verdict, risky = "위험 — 걸리면 세게 흔든다", risky + 1
@@ -78,6 +90,47 @@ def diagnose(synonyms, doc_freq, total):
                 )
     print("-" * 78)
     print(f"쓸모 {ok} · 죽음 {dead} · 위험 {risky}\n")
+
+
+def prune(synonyms, doc_freq, total, dead_share):
+    """①번 표에서 **죽은 낱말만 뺀다.** 새 낱말을 지어내지 않는다.
+
+    `check_keywords.py` 가 잰 결함은 "붙인 낱말의 84%가 정답 근거에 없다" 였다.
+    그 84%의 상당 부분이 `사업`(59%)·`사항`(64%)·`계약`(42%) 처럼 **코퍼스의 절반에
+    있는 낱말**이다. BM25 에서 IDF≈0 이라 정답을 끌어오지도 못하면서, 그 낱말이
+    든 엉뚱한 청크는 끌어온다. 순이득의 분모만 키우는 것이다.
+
+    사전에는 `배정예산` 이라고 적혀 있지만 질의도 청크와 같은 Kiwi 를 지나므로
+    실제로 붙는 건 `배정`·`예산` 이다. **그러니 사전도 형태소로 적는다.** 뜻은
+    같고, 무엇이 붙는지가 눈에 보인다.
+
+    Returns:
+        {키: "토큰 토큰 …"}. 남는 토큰이 없는 키는 아예 뺀다 — 죽은 키를
+        남겨 둬도 붙는 게 없으니 사전만 길어진다.
+    """
+    print("=" * 78)
+    print(f"③ 가지치기 — df {dead_share * 100:.0f}% 넘는 낱말을 뺀다")
+    print("=" * 78)
+
+    pruned = {}
+    for key, words in synonyms.items():
+        keep, drop = [], []
+        for word in words.split():
+            for token in korean_tokens(word) or [word]:
+                df = doc_freq.get(token, 0)
+                if df and df / total <= dead_share:
+                    if token not in keep:
+                        keep.append(token)
+                elif token not in drop:
+                    drop.append(token)
+        print(f"\n[{key}]")
+        print(f"  전:  {words}")
+        print(f"  후:  {' '.join(keep) if keep else '(키를 통째로 뺀다)'}")
+        if drop:
+            print(f"  뺌:  {' '.join(drop)}")
+        if keep:
+            pruned[key] = " ".join(keep)
+    return pruned
 
 
 def mine(
@@ -201,6 +254,10 @@ def main():
     parser.add_argument(
         "--slice-max", type=float, default=0.35, help="슬라이스가 이보다 크면 못 뽑는다"
     )
+    parser.add_argument(
+        "--dead-share", type=float, default=0.30, help="이보다 흔한 낱말은 죽은 것으로 본다"
+    )
+    parser.add_argument("--mine", action="store_true", help="②번 채굴도 돌린다(참고용)")
     parser.add_argument("--write", action="store_true", help="json 으로 떨어뜨린다")
     parser.add_argument(
         "--out", default=str(settings.OUTPUTS / "reports" / "keywords_mined.json")
@@ -220,24 +277,28 @@ def main():
         doc_freq.update(set(toks))
 
     synonyms = AddKeywords.SYNONYMS
-    diagnose(synonyms, doc_freq, total)
-    mined = mine(
-        chunk_tokens, texts, synonyms, doc_freq, total,
-        args.top, args.min_docs, args.lo, args.hi,
-        args.seed_max, args.slice_max,
-    )
+    diagnose(synonyms, doc_freq, total, args.dead_share)
+    if args.mine:
+        mine(
+            chunk_tokens, texts, synonyms, doc_freq, total,
+            args.top, args.min_docs, args.lo, args.hi,
+            args.seed_max, args.slice_max,
+        )
+
+    pruned = prune(synonyms, doc_freq, total, args.dead_share)
 
     print("\n" + "=" * 78)
-    print("③ 남는 한계 — 이걸로 안 고쳐지는 것")
+    print("남는 한계 — 이걸로 안 고쳐지는 것")
     print("=" * 78)
     print("발동률은 그대로다. 키(구어)가 질문에 있어야 붙으므로 44% 그대로다.")
     print("키를 늘리려면 실사용 질의 로그가 필요하다. 평가 세트에서 뽑으면 샌다.")
+    print("새 낱말도 안 는다. 1500자 청크로는 주제 슬라이스를 못 만든다(②).")
 
     if args.write:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
-            json.dumps(mined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            json.dumps(pruned, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         print(f"\n→ {out}")
         print("  A/B:  python scripts/retrieval/compare_retrieval.py "
@@ -271,6 +332,10 @@ def demo():
         top=3, min_docs=1, lo=0.0, hi=1.0, seed_max=0.1, slice_max=1.0,
     )
     assert kept["얼마"] == "예산", "씨앗이 전부 빠지면 원래 값을 그대로 둔다"
+
+    # 가지치기: 흔한 낱말은 빠지고, 남는 게 없으면 키가 통째로 빠진다
+    got = prune({"얼마": "예산 배정", "흔함": "시스템"}, freq, len(tokens), dead_share=0.5)
+    assert got == {"얼마": "배정"}, got
     print("\ndemo ok")
 
 
