@@ -184,6 +184,8 @@ def reload():
         dict: `{"chunks": 청크 수, "sec": 걸린 초}`.
     """
     started = time.time()
+    # **먼저 비운다.** load_chunks 가 lru_cache 라 안 비우면 옛 청크를 돌려준다.
+    chunking.load_chunks.cache_clear()
     chunks = chunking.load_chunks(CHUNKS)  # 디스크에서 새로 읽는다
     BM25(chunks, k=POOL)  # 여기서 색인을 지어 캐시에 넣는다 — 비우기 전에
     _load.cache_clear()

@@ -30,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 # `python src/chunking.py` 로 직접 돌릴 때 config 를 찾게 한다.
@@ -490,14 +491,25 @@ def save_chunks(chunks, name):
     return path
 
 
+@lru_cache(maxsize=2)
 def load_chunks(name):
-    """저장해 둔 청크를 읽는다.
+    """저장해 둔 청크를 읽는다. **한 번 읽고 돌려쓴다.**
+
+    캐시가 없을 때 `search_notices` 가 요청마다 20MB jsonl 을 다시 파싱했다.
+    1단계 검색이 질문당 1.2초였는데 그 대부분이 이것이었다 — BM25 는 0.021초,
+    Dense 는 0.084초다(9/10 실측). BM25 색인은 `_BM25_CACHE` 가 이미 받고
+    있었으므로 다시 지어지진 않았고, **파일 파싱만 되풀이**되고 있었다.
+
+    **파일이 바뀌면 이 캐시를 비워야 한다.** `retriever.reload()` 가
+    `cache_clear()` 를 먼저 부른다. 안 그러면 크론이 새 공고를 넣어도
+    옛 청크로 계속 답한다.
 
     Args:
+
         name: `save_chunks` 에 준 것과 같은 이름.
 
     Returns:
-        Document 리스트.
+        Document 리스트. **캐시된 같은 객체다** — 고치면 다른 데도 바뀐다.
 
     Raises:
         FileNotFoundError: 그 이름으로 저장된 청크가 없을 때.
