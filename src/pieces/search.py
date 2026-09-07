@@ -222,6 +222,10 @@ def run_search(searcher, state):
         found.extend(searcher.search(query))
     state.chunks = dedup_chunks(found)
     state.note(f"질문 {len(state.queries)}개로 검색 → 청크 {len(state.chunks)}개")
+    # Hybrid 는 자식마다 따로 재 둔다. Pipeline 은 Hybrid 를 한 덩어리로 보므로
+    # 여기서 꺼내 올리지 않으면 Dense 와 BM25 중 어느 쪽이 비싼지 안 보인다.
+    for name, sec in getattr(searcher, "last_timings", []):
+        state.timings.append((f"  └ {name}", sec))
     return state
 
 
@@ -754,8 +758,14 @@ class Hybrid:
     def search(self, query, k=None):
         scores = {}
         found = {}
+        # 자식마다 따로 잰다. Hybrid 를 통째로 재면 Dense 와 BM25 중 어느
+        # 쪽이 비싼지 몰라, Splade 로 무엇을 대체해야 하는지도 못 정한다.
+        self.last_timings = []
         for searcher, weight in zip(self.searchers, self.weights, strict=False):
-            for rank, chunk in enumerate(searcher.search(query, self.pool), 1):
+            started = time.time()
+            hits = searcher.search(query, self.pool)
+            self.last_timings.append((type(searcher).__name__, time.time() - started))
+            for rank, chunk in enumerate(hits, 1):
                 key = chunk.metadata.get("chunk_id") or chunk.page_content[:120]
                 scores[key] = scores.get(key, 0.0) + weight / (self.rrf_k + rank)
                 found.setdefault(key, chunk)
