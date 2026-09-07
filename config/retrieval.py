@@ -54,7 +54,13 @@ EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 # 이름은 scripts/retrieval/ingest.py 의 target_name() 이 짓는다.
 # 기본값은 DOCS 와 같은 버전으로 맞춰 둔다. 여기가 어긋나면 API 가 옛 코퍼스로
 # 답하는데 아무 오류도 안 난다 — 이 파일 맨 위 목록의 마지막 줄이 그 사고다.
-CHUNKS = os.environ.get("CHUNKS", "chunks_cleaned_documents_v8__pipeline_1500_250")
+#
+# **9/10 에 그 사고가 기본값 안에 들어 있었다.** 기본값이
+# `chunks_cleaned_documents_v8__pipeline_1500_250`(8,920청크, 실험 잔재)을
+# 가리키는 동안 서버·크론은 `.env` 를 따라 14,872청크를 보고 있었다. 두 파일이
+# 다 있어서 `.env` 없는 환경(새 체크아웃, 컨테이너)에서는 조용히 옛 코퍼스로
+# 답했을 것이다. **기본값을 산 파일로 맞춘다 — 없는 이름이면 차라리 터진다.**
+CHUNKS = os.environ.get("CHUNKS", "chunks_cleaned_documents__pipeline")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):

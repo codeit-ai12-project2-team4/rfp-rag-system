@@ -80,24 +80,43 @@ def diagnose(synonyms, doc_freq, total):
     print(f"쓸모 {ok} · 죽음 {dead} · 위험 {risky}\n")
 
 
-def mine(chunk_tokens, synonyms, doc_freq, total, top, min_docs, lo, hi):
+def mine(
+    chunk_tokens, texts, synonyms, doc_freq, total,
+    top, min_docs, lo, hi, seed_max, slice_max,
+):
     """키마다 그 개념이 실제로 쓰인 청크를 모아, 거기서만 튀는 낱말을 뽑는다.
 
-    점수는 c-TF-IDF 꼴이다 — **이 슬라이스 안 빈도 ÷ 코퍼스 전체 빈도.**
-    슬라이스에서만 자주 나오는 낱말일수록 크다. 이름만 어렵지, "이 주제
-    문단에서만 유독 자주 보이는 말" 을 세는 것이다.
+    점수는 c-TF-IDF 꼴이다 — **슬라이스 안 빈도 ÷ 코퍼스 전체 빈도.** 이 주제
+    문단에서만 유독 자주 보이는 말일수록 크다.
+
+    **1차 시도가 망가졌던 자리를 두 군데 막아 뒀다(9/10).**
+
+    ① 씨앗에 문턱이 없었다. `기간` 의 씨앗이 형태소로 쪼개져 `사업`(59%)·
+       `계약`(42%)·`기간`(30%)이 되니 슬라이스가 코퍼스의 74% 였다. 그건 주제가
+       아니라 그냥 코퍼스다. **죽은 낱말은 후보에서만 걸렀지 앵커에서는 안
+       걸렀다.** 그래서 `--seed-max` 를 넘는 씨앗은 슬라이스를 고르는 데 안 쓴다.
+    ② 씨앗을 형태소로 쪼개 맞췄다. `사업기간` 이 `사업` 또는 `기간` 으로 걸리니
+       안 넓어질 수가 없다. **씨앗은 글자 그대로 찾는다** — `사업기간` 이라고 쓴
+       줄만 걸린다. 후보 쪽은 BM25 가 형태소를 보므로 그대로 형태소로 센다.
+
+    슬라이스가 넓으면 슬라이스 밖에 안 나오는 토큰의 배수가 전부 `N ÷ 슬라이스`
+    라는 **같은 상수**가 된다. 그러면 순위가 동점 포화라 아무 뜻이 없다. 그 상태를
+    `--slice-max` 로 막고, 걸린 후보에는 `*` 를 붙여 눈에 보이게 둔다.
 
     Args:
-        chunk_tokens: 청크별 토큰 리스트.
-        synonyms: 씨앗 사전. 슬라이스를 고르는 데만 쓴다.
-        doc_freq: 코퍼스 전체 df.
+        chunk_tokens: 청크별 형태소 토큰.
+        texts: 청크 원문. 씨앗을 글자 그대로 찾는 데 쓴다.
+        synonyms: 씨앗 사전.
+        doc_freq: 코퍼스 전체 df(청크 단위).
         total: 청크 수.
         top: 키마다 남길 후보 수.
         min_docs: 슬라이스 안에서 이만큼은 나와야 후보로 본다.
-        lo, hi: 전체 df 비율의 위아래 문. 밖은 버린다.
+        lo, hi: 후보의 전체 df 비율 위아래 문.
+        seed_max: 이 비율을 넘는 씨앗은 앵커로 안 쓴다.
+        slice_max: 슬라이스가 코퍼스의 이 비율을 넘으면 그 키는 못 뽑는다.
 
     Returns:
-        {키: "낱말 낱말 …"} 새 사전.
+        {키: "낱말 낱말 …"}. 못 뽑은 키는 원래 값을 그대로 둔다.
     """
     print("=" * 78)
     print("② 코퍼스에서 뽑기 — 문항 0개")
@@ -105,13 +124,33 @@ def mine(chunk_tokens, synonyms, doc_freq, total, top, min_docs, lo, hi):
 
     mined = {}
     for key, words in synonyms.items():
-        seeds = set()
+        # 씨앗은 글자 그대로. 너무 흔한 것은 앵커에서 뺀다.
+        seeds, dropped = [], []
         for word in words.split():
-            seeds.update(korean_tokens(word) or [word])
+            df = sum(1 for t in texts if word in t)
+            (dropped if df / total > seed_max else seeds).append((word, df))
 
-        slice_ids = [i for i, toks in enumerate(chunk_tokens) if seeds & set(toks)]
+        if not seeds:
+            print(f"\n[{key}] 씨앗이 전부 너무 흔하다 — 못 뽑음. 사전을 좁혀야 한다")
+            print("       " + " · ".join(f"{w} {d / total * 100:.0f}%" for w, d in dropped))
+            mined[key] = words
+            continue
+
+        keep = {w for w, _ in seeds}
+        slice_ids = [i for i, t in enumerate(texts) if any(w in t for w in keep)]
+        share = len(slice_ids) / total
+
+        head = f"\n[{key}]  씨앗 {' '.join(sorted(keep))}"
+        if dropped:
+            head += f"  (뺀 씨앗 {' '.join(w for w, _ in dropped)})"
+        print(f"{head}  · 슬라이스 {len(slice_ids)}청크 ({share * 100:.0f}%)")
+
         if len(slice_ids) < min_docs:
-            print(f"\n[{key}] 씨앗이 걸린 청크 {len(slice_ids)}개 — 너무 적어 건너뜀")
+            print("       너무 적어 건너뜀")
+            mined[key] = words
+            continue
+        if share > slice_max:
+            print(f"       슬라이스가 코퍼스의 {share * 100:.0f}% — 주제가 아니다. 못 뽑음")
             mined[key] = words
             continue
 
@@ -123,22 +162,23 @@ def mine(chunk_tokens, synonyms, doc_freq, total, top, min_docs, lo, hi):
         for token, count in inside.items():
             if count < min_docs:
                 continue
-            share = doc_freq[token] / total
-            if not (lo <= share <= hi):
-                continue  # 너무 흔하면 IDF≈0, 너무 드물면 잘못 걸릴 때 크게 흔든다
-            lift = (count / len(slice_ids)) / share
+            token_share = doc_freq[token] / total
+            if not (lo <= token_share <= hi):
+                continue  # 흔하면 IDF≈0, 드물면 잘못 걸릴 때 크게 흔든다
+            lift = (count / len(slice_ids)) / token_share
             scored.append((lift, count, token))
         scored.sort(reverse=True)
 
         picked = [t for _, _, t in scored[:top]]
         mined[key] = " ".join(picked) if picked else words
 
-        print(f"\n[{key}]  씨앗 {' '.join(sorted(seeds))}  · 슬라이스 {len(slice_ids)}청크")
         print(f"  전:  {words}")
         print(f"  후:  {mined[key]}")
         for lift, count, token in scored[:top]:
+            # 슬라이스 밖에 하나도 없으면 배수가 상수로 포화한다. 표시해 둔다.
+            flag = "*" if count == doc_freq[token] else " "
             print(
-                f"       {token:<12} 슬라이스 {count:>5}/{len(slice_ids)} "
+                f"       {token:<12}{flag} 슬라이스 {count:>5}/{len(slice_ids)} "
                 f"· 전체 {doc_freq[token] / total * 100:>5.1f}% · 배수 {lift:>5.2f}"
             )
     return mined
@@ -153,8 +193,14 @@ def main():
     )
     parser.add_argument("--top", type=int, default=5, help="키마다 남길 낱말 수")
     parser.add_argument("--min-docs", type=int, default=20, help="후보의 최소 등장 청크 수")
-    parser.add_argument("--lo", type=float, default=0.002, help="전체 df 비율 아래 문")
-    parser.add_argument("--hi", type=float, default=0.25, help="전체 df 비율 위 문")
+    parser.add_argument("--lo", type=float, default=0.002, help="후보 df 비율 아래 문")
+    parser.add_argument("--hi", type=float, default=0.25, help="후보 df 비율 위 문")
+    parser.add_argument(
+        "--seed-max", type=float, default=0.25, help="이보다 흔한 씨앗은 앵커로 안 쓴다"
+    )
+    parser.add_argument(
+        "--slice-max", type=float, default=0.35, help="슬라이스가 이보다 크면 못 뽑는다"
+    )
     parser.add_argument("--write", action="store_true", help="json 으로 떨어뜨린다")
     parser.add_argument(
         "--out", default=str(settings.OUTPUTS / "reports" / "keywords_mined.json")
@@ -176,8 +222,9 @@ def main():
     synonyms = AddKeywords.SYNONYMS
     diagnose(synonyms, doc_freq, total)
     mined = mine(
-        chunk_tokens, synonyms, doc_freq, total,
+        chunk_tokens, texts, synonyms, doc_freq, total,
         args.top, args.min_docs, args.lo, args.hi,
+        args.seed_max, args.slice_max,
     )
 
     print("\n" + "=" * 78)
@@ -205,17 +252,25 @@ def demo():
     assert idf(9000, 10000) < 0.2, "9할에 나오는 낱말은 IDF 가 0 근처여야 한다"
 
     tokens = [["예산", "배정"], ["예산", "금액"], ["시스템"], ["시스템"], ["시스템", "예산"]]
+    texts = ["".join(t) for t in tokens]
     freq = Counter()
     for t in tokens:
         freq.update(set(t))
     mined = mine(
-        tokens, {"얼마": "예산"}, freq, len(tokens),
-        top=3, min_docs=1, lo=0.0, hi=1.0,
+        tokens, texts, {"얼마": "예산"}, freq, len(tokens),
+        top=3, min_docs=1, lo=0.0, hi=1.0, seed_max=1.0, slice_max=1.0,
     )
     # `배정`·`금액` 은 예산 슬라이스 안에만 있고, `시스템` 은 주로 밖에 있다
     picked = mined["얼마"].split()
     assert "배정" in picked and "금액" in picked, picked
     assert "시스템" not in picked, picked
+
+    # 너무 흔한 씨앗은 앵커에서 빠지고, 그 키는 못 뽑는다고 말해야 한다
+    kept = mine(
+        tokens, texts, {"얼마": "예산"}, freq, len(tokens),
+        top=3, min_docs=1, lo=0.0, hi=1.0, seed_max=0.1, slice_max=1.0,
+    )
+    assert kept["얼마"] == "예산", "씨앗이 전부 빠지면 원래 값을 그대로 둔다"
     print("\ndemo ok")
 
 
