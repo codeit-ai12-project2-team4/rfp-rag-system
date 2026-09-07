@@ -170,7 +170,7 @@ def analyze_text_columns(df: pd.DataFrame) -> None:
     text_columns = df.select_dtypes(include=["object", "string"]).columns
 
     for column in text_columns:
-        lengths = df[column].fillna("").astype(str).str.len()
+        lengths = df[column].fillna("").astype(str).str.len() # type: ignore
         print("\n" + "-" * 70)
         print(f"[{column}]")
         print(lengths.describe().to_string())
@@ -232,7 +232,7 @@ def analyze_file_extensions(df: pd.DataFrame) -> None:
             df[column]
             .dropna()
             .astype(str)
-            .str.extract(
+            .str.extract( # type: ignore
                 r"(\.[^.]+)$",
                 expand=False,
             )
