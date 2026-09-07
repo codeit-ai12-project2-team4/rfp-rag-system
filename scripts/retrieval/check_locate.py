@@ -213,13 +213,33 @@ def main():
     two_plus = sum(v for k, v in depths.items() if k >= 2) / total * 100
     one_plus = sum(v for k, v in depths.items() if k >= 1) / total * 100
     print(f"\n  1단계 이상  {one_plus:.1f}%")
-    print(f"  2단계 이상  {two_plus:.1f}%   <- 이 값이 기능의 운명")
+    print(f"  2단계 이상  {two_plus:.1f}%")
     print(f"  쪽 범위까지 {with_page / total * 100:.1f}%  (목차가 파싱된 문서)")
+
+    # **여기가 진짜 판정이다.** 위의 합산은 잘 되는 문서와 아예 안 되는 문서를
+    # 섞어 평균 낸 값이라 **어떤 문서도 그렇게 동작하지 않는다**. 실패는 청크마다
+    # 흩어져 있지 않고 문서 단위로 뭉쳐 있다 — 제목이 있는 문서는 99%, 없는
+    # 문서는 0%다. 그러면 문서 단위로 켜고 끄면 된다. 되는 문서에서만 말하고
+    # 안 되는 문서에서는 침묵한다. **틀린 출처를 보여주는 게 아니라 안 보여준다.**
+    print("\n" + "-" * 74)
+    print("문서 단위로 보면 — 실패는 청크가 아니라 문서에 뭉쳐 있다")
+    print("-" * 74)
+    rates = {src: per_doc_deep[src] / n for src, n in per_doc.items() if n}
+    good = [s for s, r in rates.items() if r >= 0.8]
+    dead = [s for s, r in rates.items() if r < 0.2]
+    mid = [s for s, r in rates.items() if 0.2 <= r < 0.8]
+    covered = sum(per_doc[s] for s in good) / total * 100
+    for label, group in (("잘 됨 (80%+)", good), ("어중간", mid), ("안 됨 (20%-)", dead)):
+        share = len(group) / len(rates) * 100
+        print(f"  {label:<14} {len(group):>4}건  {share:>5.1f}%")
+    print(f"\n  켜지는 문서의 청크가 전체의 {covered:.1f}%")
+    print("  나머지 문서에서는 **아무 말도 안 한다** (틀린 출처를 보여주지 않는다)")
+
     print()
-    if two_plus >= 90:
-        print("판정: 붙인다. 경로가 충분히 깊다")
-    elif one_plus >= 90:
-        print("판정: 붙이되 경로가 얕다. 최상위 장만 말하는 문서가 많다")
+    if len(good) / len(rates) >= 0.8:
+        print("판정: 붙인다. 문서 단위로 켜고 끈다")
+    elif len(good) / len(rates) >= 0.5:
+        print("판정: 붙일 수 있다. 다만 절반 가까이 침묵하므로 화면에서 그게 자연스러워야 한다")
     else:
         print("판정: 접는다. 전처리에서 제목을 태그로 남겨야 한다")
 
@@ -245,7 +265,8 @@ def main():
             got = path_at(marks, offset)
             span = page_of(text, offset, entries) if entries else None
             tail = f"   [{span[0]}~{span[1]}쪽]" if span else ""
-            print(f"  {' > '.join(got) if got else '(못 찾음)'}{tail}")
+            # 문서의 첫 청크는 표지·목차라 제목 위에 있다. 늘 (못 찾음)이 맞다.
+            print(f"  {' > '.join(got) if got else '(못 찾음 — 표지·목차)'}{tail}")
             shown += 1
             if shown == 3:
                 break
