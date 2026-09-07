@@ -896,7 +896,9 @@ def main():
         action="store_true",
         help="평가 질문 전체의 발췌를 파일로 뽑는다 (generation 전달용)",
     )
-    parser.add_argument("--evalset", default="eval_qa", help="data/ 의 평가 세트 이름")
+    parser.add_argument(
+        "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"
+    )
     parser.add_argument(
         "--unscoped",
         action="store_true",

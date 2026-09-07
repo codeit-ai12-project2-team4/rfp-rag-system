@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 
 import retriever
+from config import retrieval as cfg  # noqa: E402
 from config import settings
 from evaluation import load_evalset
 
@@ -123,7 +124,9 @@ def main():
     """설정을 바꿔 가며 공고 검색을 재고 표로 찍는다."""
     parser = argparse.ArgumentParser(description="공고 검색(1단계)을 잰다.")
     parser.add_argument("--chunks", required=True, help="청크 이름 (__header 없이)")
-    parser.add_argument("--evalset", default="eval_qa_80")
+    parser.add_argument(
+        "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"
+    )
     parser.add_argument("--pool", type=int, default=100, help="훑어볼 청크 수")
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument(

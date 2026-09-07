@@ -25,13 +25,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
+from config import retrieval as cfg  # noqa: E402
 from evaluation import load_evalset  # noqa: E402
 from pieces.expand import AddKeywords  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description="AddKeywords 사전이 하는 일을 잰다.")
-    parser.add_argument("--evalset", default="eval_qa_both")
+    parser.add_argument(
+        "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"
+    )
     args = parser.parse_args()
 
     synonyms = AddKeywords.SYNONYMS

@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 import pandas as pd
 
+from config import retrieval as cfg  # noqa: E402
 from config import settings
 from retriever import open_index
 
@@ -60,7 +61,9 @@ def main():
         default=1 / 6,
         help="겹침 = 크기 × 이 값 (1200/200 이 1/6 이다)",
     )
-    parser.add_argument("--evalset", default="eval_qa_80")
+    parser.add_argument(
+        "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"
+    )
     parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
     )

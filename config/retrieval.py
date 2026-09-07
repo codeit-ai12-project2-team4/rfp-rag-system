@@ -25,7 +25,7 @@
 # 좋다고 판단되면 그때 아래 기본값을 고친다.
 import os
 
-DOCS = os.environ.get("DOCS", "cleaned_documents_v8")
+DOCS = os.environ.get("DOCS", "cleaned_documents")
 HOW = os.environ.get("HOW", "recursive")
 SIZE = int(os.environ.get("SIZE", "1500"))
 OVERLAP = int(os.environ.get("OVERLAP", "250"))
@@ -33,7 +33,7 @@ EMBED = os.environ.get("EMBED", "tei")
 # 벡터 저장소. faiss 가 기본이고 lance 는 나란히 두고 재 보는 중이다.
 # 이름 규칙이 같아서 인덱스 이름은 그대로 쓴다 — 폴더만 다르다
 # (outputs/vectorstore vs outputs/lancedb).
-STORE = os.environ.get("STORE", "faiss")
+STORE = os.environ.get("STORE", "lance")
 RERANK = os.environ.get("RERANK", "tei")
 POOL = int(os.environ.get("POOL", "30"))  # 2단계. 리랭커에 넘길 후보 수 (9/4 스윕)
 # 1단계 공고 검색. 청크를 공고로 묶으므로 목록 길이는 이것보다 짧다.
