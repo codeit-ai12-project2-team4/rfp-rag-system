@@ -38,6 +38,7 @@
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -65,7 +66,6 @@ from pieces import (
     SpladeModel,
 )
 from config import retrieval as cfg
-from preprocessing import load_documents
 from retriever import open_index
 
 
@@ -166,6 +166,16 @@ def build_setups(args):
         keyword_pipe = Pipeline([AddKeywords(), hybrid, Rerank(reranker, k=args.pool)])
         setups["용어추가+Hybrid+Rerank"] = lambda q: keyword_pipe(q).chunks
 
+        # 코퍼스에서 뽑은 사전(mine_keywords.py)을 같은 자리에 끼워 나란히 잰다.
+        # 손으로 쓴 사전과 **한 실행 안에서** 겨뤄야 한다. 따로 돌리면 그 사이
+        # 크론이 청크를 늘려서 두 성적이 다른 코퍼스 것이 된다(9/10 에 겪었다).
+        if args.keywords:
+            mined = json.loads(Path(args.keywords).read_text(encoding="utf-8"))
+            mined_pipe = Pipeline([
+                AddKeywords(mined), hybrid, Rerank(reranker, k=args.pool)
+            ])
+            setups["용어추가(채굴)+Hybrid+Rerank"] = lambda q: mined_pipe(q).chunks
+
         # Splade 조합을 리랭커에 태운다. 후보를 만드는 쪽이 바뀌면 리랭커가
         # 볼 30개가 바뀌므로, 리랭커 없이 잰 순위는 그대로 가지 않는다.
         if bm25_splade is not None:
@@ -246,14 +256,9 @@ def main():
     parser = argparse.ArgumentParser(description="검색 방법 비교")
     parser.add_argument("--chunks", required=True, help="outputs/chunks 의 청크 이름")
     parser.add_argument(
-        "--docs",
-        default="cleaned_documents",
-        help="질문을 즉석에서 뽑을 전처리본 (--evalset 없을 때만)",
-    )
-    parser.add_argument(
         "--evalset",
-        default="eval_qa",
-        help="data/ 의 평가 세트 이름. 없으면 --docs 에서 즉석 생성",
+        default=cfg.EVALSET,
+        help=f"data/ 의 평가 세트 이름 (기본: .env·config 의 {cfg.EVALSET})",
     )
     parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
@@ -275,6 +280,10 @@ def main():
         help="Hybrid 의 BM25 비중들. 쉼표로 구분",
     )
     parser.add_argument("--no-rerank", action="store_true", help="리랭커를 빼고 잰다")
+    parser.add_argument(
+        "--keywords",
+        help="mine_keywords.py 가 뽑은 사전 json. 손으로 쓴 사전과 나란히 잰다",
+    )
     parser.add_argument(
         "--splade",
         action="store_true",
@@ -322,12 +331,11 @@ def main():
         f"{args.evalset}.json", args.chunks, chunking.load_chunks(args.chunks)
     )
 
-    try:
-        pairs = ev.load_evalset(args.evalset)
-        print(f"평가 세트 {args.evalset}.json · 질문 {len(pairs)}개")
-    except FileNotFoundError:
-        pairs = ev.make_pairs_from_documents(load_documents(args.docs))
-        print(f"평가 세트가 없어 즉석 생성 · 질문 {len(pairs)}개")
+    # **폴백을 없앴다 (9/10).** 세트를 못 찾으면 조용히 즉석 생성으로 넘어갔는데,
+    # 그 문항에는 유형 태그가 없어 표가 "전체" 한 칸으로 접힌다. 그 상태로 두 번을
+    # 재고 나서야 알아챘다. 이름을 대고 부른 세트가 없으면 **터지는 게 맞다.**
+    pairs = ev.load_evalset(args.evalset)
+    print(f"평가 세트 {args.evalset} · 질문 {len(pairs)}개")
 
     # 답이 없는 질문(물러섬)은 검색 지표 대상이 아니다. 생성 평가에서 쓴다.
     skipped = [p for p in pairs if not p.get("keywords")]

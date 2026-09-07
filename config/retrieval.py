@@ -25,7 +25,7 @@
 # 좋다고 판단되면 그때 아래 기본값을 고친다.
 import os
 
-DOCS = os.environ.get("DOCS", "cleaned_documents_v8")
+DOCS = os.environ.get("DOCS", "cleaned_documents")
 HOW = os.environ.get("HOW", "recursive")
 SIZE = int(os.environ.get("SIZE", "1500"))
 OVERLAP = int(os.environ.get("OVERLAP", "250"))
@@ -33,7 +33,7 @@ EMBED = os.environ.get("EMBED", "tei")
 # 벡터 저장소. faiss 가 기본이고 lance 는 나란히 두고 재 보는 중이다.
 # 이름 규칙이 같아서 인덱스 이름은 그대로 쓴다 — 폴더만 다르다
 # (outputs/vectorstore vs outputs/lancedb).
-STORE = os.environ.get("STORE", "faiss")
+STORE = os.environ.get("STORE", "lance")
 RERANK = os.environ.get("RERANK", "tei")
 POOL = int(os.environ.get("POOL", "30"))  # 2단계. 리랭커에 넘길 후보 수 (9/4 스윕)
 # 1단계 공고 검색. 청크를 공고로 묶으므로 목록 길이는 이것보다 짧다.
@@ -54,7 +54,13 @@ EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 # 이름은 scripts/retrieval/ingest.py 의 target_name() 이 짓는다.
 # 기본값은 DOCS 와 같은 버전으로 맞춰 둔다. 여기가 어긋나면 API 가 옛 코퍼스로
 # 답하는데 아무 오류도 안 난다 — 이 파일 맨 위 목록의 마지막 줄이 그 사고다.
-CHUNKS = os.environ.get("CHUNKS", "chunks_cleaned_documents_v8__pipeline_1500_250")
+#
+# **9/10 에 그 사고가 기본값 안에 들어 있었다.** 기본값이
+# `chunks_cleaned_documents_v8__pipeline_1500_250`(8,920청크, 실험 잔재)을
+# 가리키는 동안 서버·크론은 `.env` 를 따라 14,872청크를 보고 있었다. 두 파일이
+# 다 있어서 `.env` 없는 환경(새 체크아웃, 컨테이너)에서는 조용히 옛 코퍼스로
+# 답했을 것이다. **기본값을 산 파일로 맞춘다 — 없는 이름이면 차라리 터진다.**
+CHUNKS = os.environ.get("CHUNKS", "chunks_cleaned_documents__pipeline")
 
 
 def chunk_name(docs=None, how=None, size=None, overlap=None):

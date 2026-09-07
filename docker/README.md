@@ -209,12 +209,16 @@ curl -s localhost:8010/health | python3 -m json.tool
 { "ok": true, "embedder": "dragonkue/snowflake-arctic-embed-l-v2.0-ko",
   "reranker": "dragonkue/bge-reranker-v2-m3-ko",
   "generator": "Qwen/Qwen2.5-3B-Instruct",
-  "store": "faiss", "index": "cleaned_documents_v8__pipeline_1500_250__tei",
-  "chunks": "cleaned_documents_v8__pipeline_1500_250" }
+  "store": "lance", "index": "chunks_cleaned_documents__pipeline__tei",
+  "chunks": "chunks_cleaned_documents__pipeline",
+  "refresh": { "at": "...", "ok": true, "step": "끝" } }
 ```
 
 `null` 인 칸이 끊긴 칸이다. **`store`/`index` 를 같이 주는 이유** — 배포 사고의
 절반이 "어느 코퍼스를 보고 있는지" 가 어긋난 것이었다.
+
+`chunks` 값과 `wc -l outputs/chunks/*.jsonl` 을 대 봐라. 옛 실험 청크가 옆에
+남아 있으면 이름만 보고는 못 가른다. **줄 수가 맞는 쪽이 산 것이다.**
 
 ### 재부팅이 진짜 되는지는 재부팅해봐야 안다
 

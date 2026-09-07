@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 import chunking
+from config import retrieval as cfg  # noqa: E402
 from config import settings
 from evaluation import fit_budget, load_evalset
 from evaluation.evalset import matches
@@ -118,7 +119,9 @@ def main():
     parser = argparse.ArgumentParser(description="틀린 문항을 눈으로 본다.")
     parser.add_argument("--chunks", required=True, help="청크 이름 (__header 없이)")
     parser.add_argument("--type", default="의역", help="질문 유형. all 이면 전부")
-    parser.add_argument("--evalset", default="eval_qa")
+    parser.add_argument(
+        "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"
+    )
     parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]
     )

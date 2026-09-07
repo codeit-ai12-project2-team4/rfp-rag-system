@@ -53,12 +53,39 @@ def save_evalset(pairs, name="eval_qa"):
 
 
 def load_evalset(name="eval_qa"):
-    path = settings.DATA / f"{name}.json"
-    if not path.exists():
+    """평가 세트를 읽는다. `.json` 과 `.jsonl` 둘 다 받는다.
+
+    `.jsonl` 을 안 받던 게 9/10 에 사고를 냈다. `.env` 는 `EVALSET=eval_qa_160`
+    을 가리키는데 파일은 `eval_qa_160.jsonl` 이라 못 찾았고, 부르는 쪽이 조용히
+    즉석 생성으로 넘어가 **평가 세트가 아닌 문항으로 두 번을 쟀다.** 팀원이
+    세트를 손볼 때 어느 확장자로 내놓을지는 우리가 못 정한다. 둘 다 받는다.
+    """
+    found = [
+        settings.DATA / f"{name}{suffix}"
+        for suffix in (".json", ".jsonl")
+        if (settings.DATA / f"{name}{suffix}").exists()
+    ]
+    if len(found) > 1:
+        # 같은 이름이 두 확장자로 있으면 어느 쪽이 최신인지 알 수 없다. 조용히
+        # 고르면 낡은 쪽으로 재게 된다 — 9/10 에 같은 사고를 네 번 겪었다.
+        newest = max(found, key=lambda f: f.stat().st_mtime)
+        print(
+            f"  ⚠ {name} 이 두 개다: {' · '.join(f.name for f in found)}\n"
+            f"    {found[0].name} 을 읽는다. 최근에 바뀐 건 {newest.name} 이다."
+        )
+    if found:
+        path = found[0]
+    else:
+        available = sorted(
+            f.stem for f in settings.DATA.glob("*.json*") if not f.name.endswith(".meta.json")
+        )
         raise FileNotFoundError(
-            f"평가 세트가 없습니다: {path}\n노트북 4번에서 만들고 저장하세요."
+            f"평가 세트가 없습니다: {settings.DATA / name}.json(l)\n"
+            f"있는 것: {' '.join(available)}"
         )
     with open(path, encoding="utf-8") as f:
+        if path.suffix == ".jsonl":
+            return [json.loads(line) for line in f if line.strip()]
         return json.load(f)
 
 
