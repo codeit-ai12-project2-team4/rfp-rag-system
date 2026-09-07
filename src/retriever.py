@@ -108,7 +108,7 @@ from config import retrieval as cfg
 from config import settings
 from evaluation import body, fit_budget
 from models import load_embedder, load_reranker
-from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
+from pieces import AddKeywords, BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
