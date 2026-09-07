@@ -108,7 +108,7 @@ from config import retrieval as cfg
 from config import settings
 from evaluation import body, fit_budget
 from models import load_embedder, load_reranker
-from pieces import AddKeywords, BM25, Dense, Hybrid, Pipeline, Rerank, State
+from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
@@ -220,10 +220,23 @@ def retrieve(
     """
     store, chunk_list, reranker = _load(index, chunks, embed, rerank)
     # BM25 는 같은 청크 묶음이면 색인을 돌려쓴다. 그래서 질문마다 만들어도 싸다.
+    # **용어추가(AddKeywords)를 뺐다 (9/10).** 가중 MRR +0.008 로 보였지만
+    # 노이즈 폭이 ±0.015 다. 부호는 6칸에서 일정했는데 전부 같은 평가 세트라
+    # 독립 시행이 아니다 — 같은 한두 문항이 매번 구제되면 6개 사건이 아니라
+    # 하나다. 성적으로는 못 가른다.
+    #
+    # 그래서 사전이 하는 일을 따로 쟀다(`check_keywords.py`, 177문항):
+    #
+    #     발동                 77문항 (44%)
+    #     붙인 낱말이 근거에 있음   55 (16%)
+    #     근거에 없음            287 (84%)   ← 후보를 흩뜨린다
+    #     `자격`·`벌금`          한 번도 안 걸림
+    #
+    # 넷 중 셋이 정답 근거에 없는 낱말이다. 사전을 코퍼스에서 뽑지 않고
+    # 짐작으로 썼기 때문이다. **성적이 아니라 메커니즘 때문에 뺀다.**
+    # 되살리려면 사전을 코퍼스에서 뽑고, 뽑을 때 쓴 문항과 잴 때 쓴 문항을
+    # 나눠야 한다. 부품(`pieces/expand.py`)은 남겨 둔다.
     pipeline = Pipeline([
-        # 사전만 쓰는 질의 확장. 스윕에서 가중 MRR +0.007, 적중률 +0.011.
-        # 문서에는 9/8 에 "채택" 이라고 적혀 있었지만 코드에는 안 붙어 있었다.
-        AddKeywords(),
         Hybrid(
             [
                 Dense(store, k=pool, doc_ids=doc_ids),
