@@ -69,9 +69,11 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
 
 | 문서 | 링크 |
 | :--: | :--: |
-| 📎 EDA README | # EDA README 경로 |
+| 📎 config README | [바로가기](config/README.md) |
+| 📎 docker README | [바로가기](docker/README.md) |
+| 📎 EDA README | [바로가기](eda/README.md) |
+| 📎 scripts README | [바로가기](scripts/README.md) |
 | 📎 src 통합 README | [바로가기](src/README.md) |
-| 📎 pipeline README | # pipeline README 경로 |
 
 <br/>
 
@@ -80,48 +82,79 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
 ```
 📦 rfp-rag-system
 ┣ 📂 config
+┃ ┣ 📂 prompts
+┃ ┃ ┗ 📝 system.md
 ┃ ┣ 📝 __init__.py
 ┃ ┣ 📝 model_config.py
-┃ ┗ 📝 settings.py
+┃ ┣ 📝 retrieval.py
+┃ ┣ 📝 settings.py
+┃ ┗ 📃 README.md
+┣ 📂 data               (gitignore)
+┃ ┣ 📂 metadata
+┃ ┣ 📂 processed
+┃ ┗ 📂 raw
+┣ 📂 docker
+┃ ┣ 📝 bidmate-api.service
+┃ ┣ 📝 crontab.txt
+┃ ┣ 📝 docker-compose.yml
+┃ ┗ 📃 README.md
 ┣ 📂 eda
+┃ ┣ 📂 eda_code
+┃ ┣ 📂 eda_results
+┃ ┗ 📃 README.md
 ┣ 📂 outputs            (gitignore)
+┣ 📂 scripts
+┃ ┣ 📂 retrieval        (검색 파트 운영·진단 스크립트 다수)
+┃ ┣ 📝 check_gen_store.py
+┃ ┣ 📝 check_judge.py
+┃ ┣ 📝 generator.py
+┃ ┣ 📝 sampler.py
+┃ ┗ 📃 README.md
 ┣ 📂 src
-┃ ┣ 📂 models
-┃ ┃ ┣ 📝 __init__.py
-┃ ┃ ┣ 📝 embed.py
-┃ ┃ ┣ 📝 rerank.py
-┃ ┃ ┣ 📝 llm.py
-┃ ┃ ┗ 📝 health.py
-┃ ┣ 📂 pieces
-┃ ┃ ┣ 📝 __init__.py
-┃ ┃ ┣ 📝 base.py
-┃ ┃ ┣ 📝 search.py
-┃ ┃ ┗ 📝 refine.py
 ┃ ┣ 📂 evaluation
 ┃ ┃ ┣ 📝 __init__.py
 ┃ ┃ ┣ 📝 evalset.py
 ┃ ┃ ┣ 📝 retrieval.py
 ┃ ┃ ┗ 📝 generation.py
+┃ ┣ 📂 models
+┃ ┃ ┣ 📝 __init__.py
+┃ ┃ ┣ 📝 embed.py
+┃ ┃ ┣ 📝 rerank.py
+┃ ┃ ┣ 📝 llm.py
+┃ ┃ ┣ 📝 sglang.py
+┃ ┃ ┗ 📝 health.py
+┃ ┣ 📂 pieces
+┃ ┃ ┣ 📝 __init__.py
+┃ ┃ ┣ 📝 base.py
+┃ ┃ ┣ 📝 search.py
+┃ ┃ ┣ 📝 refine.py
+┃ ┃ ┗ 📝 expand.py
 ┃ ┣ 📂 preprocessing
+┃ ┃ ┣ 📂 rfp            (원본 hwp/pdf/hwpx → 전처리본·청크 생성. 자세한 내용은 src/README.md 참고)
 ┃ ┃ ┣ 📝 __init__.py
 ┃ ┃ ┣ 📝 clean.py
+┃ ┃ ┣ 📝 fields.py
 ┃ ┃ ┣ 📝 hwp.py
 ┃ ┃ ┣ 📝 hwp_table.py
 ┃ ┃ ┣ 📝 pdf.py
+┃ ┃ ┣ 📝 pipeline.py    (전처리팀 원본, 현재 비활성)
 ┃ ┃ ┣ 📝 run.py
 ┃ ┃ ┗ 📝 toc.py
 ┃ ┣ 📝 __init__.py
+┃ ┣ 📝 api.py
 ┃ ┣ 📝 chunking.py
-┃ ┣ 📝 vectorstore.py
+┃ ┣ 📝 crawl.py
+┃ ┣ 📝 evalrun.py
+┃ ┣ 📝 generation.py
+┃ ┣ 📝 lance_store.py
+┃ ┣ 📝 pipeline.py
 ┃ ┣ 📝 resources.py
 ┃ ┣ 📝 retriever.py
-┃ ┣ 📝 generation.py
-┃ ┣ 📝 pipeline.py
+┃ ┣ 📝 vectorstore.py
 ┃ ┗ 📃 README.md
 ┣ 🔧 .env.example
 ┣ 🔧 .gitignore
 ┣ 📝 main.py
-┣ 📃 PIPELINE.md
 ┣ 📃 README.md
 ┗ 📃 requirements.txt
 ```
