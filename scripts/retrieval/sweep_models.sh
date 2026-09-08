@@ -29,6 +29,7 @@ PY=.venv/bin/python
 # 만들어진다.** 설계된 동작이지만, 스윕 도중에 그러면 판끼리 다른 문항을 재게
 # 된다. 도장이 없는 고정 세트를 쓰는 게 맞다 (예: 어댑터가 만든 eval_160_ours).
 : "${EVALSET:?EVALSET 를 지정하세요 — 예: EVALSET=eval_160_ours bash $0}"
+STAGE=${STAGE:-all}                       # all | embed | rerank (반쪽만 다시 돌릴 때)
 LIVE=${LIVE:-chunks_cleaned_documents__pipeline}
 SNAP=sweep_$(date +%m%d)                  # 실험 전용 청크 이름
 OUT=outputs/eval_results/sweep_$(date +%m%d)
@@ -46,7 +47,10 @@ IMAGE=ghcr.io/huggingface/text-embeddings-inference:89-1.9
 EMBEDDERS=(
   "dragonkue/snowflake-arctic-embed-l-v2.0-ko|query: |"          # 현재 채택
   "dragonkue/BGE-m3-ko||"                                        # 접두어 없음
-  "nlpai-lab/KURE-v2||"                                          # BGE-M3 계열 → 없음
+  "nlpai-lab/KURE-v1||"                                          # BGE-M3 계열 → 없음
+  # KURE-v2 는 뺐다 — TEI 가 못 연다: `missing field global_rope_theta`.
+  # modules.json 도 pylate 형식이라 파싱에 실패한다. 라이브러리가 모델을
+  # 고르는 것이지 그 반대가 아니다 (9/8).
   "Qwen/Qwen3-Embedding-0.6B|@QWEN@|"                            # 질의에만 지시문
 )
 # Qwen3 는 지시문을 질의에만 붙인다. 안 붙이면 재현율이 크게 떨어진다
@@ -81,7 +85,7 @@ echo "크론 정지. 복원본 $BAK ($(grep -c "^[^#]*refresh\.sh" "$BAK") 줄�
 cleanup() {
     echo
     echo "정리 중…"
-    docker rm -f tei-sweep >/dev/null 2>&1 || true
+    docker ps -aq --filter name=tei-sweep | xargs -r docker rm -f >/dev/null 2>&1 || true
     # 복원은 **확인까지 해야 복원이다.** 명령이 0을 뱉고도 빈 크론탭이 앉는 경우가 있다.
     crontab "$BAK" 2>/dev/null || true
     if [ "$(crontab -l 2>/dev/null | grep -c "^[^#]*refresh\.sh")" -ge 1 ]; then
@@ -98,15 +102,19 @@ echo "청크 스냅샷 $SNAP ($(wc -l < "outputs/chunks/$SNAP.jsonl") 줄)"
 
 # 실험용 TEI 하나를 띄운다. 뜰 때까지 기다린다.
 start_tei() {   # $1=모델 $2=포트 $3=추가인자
-    docker rm -f tei-sweep >/dev/null 2>&1 || true
-    docker run -d --name tei-sweep --gpus all -p "$2:80" \
+    # **컨테이너 이름을 포트에서 뽑는다.** 이름이 하나면 리랭커를 띄우는 순간
+    # 임베더가 죽는다. 9/8 에 그래서 리랭커 판이 전부 Connection refused 로 죽었다
+    # — Dense 검색은 질의를 임베딩해야 하므로 8095 가 살아 있어야 한다.
+    local NAME="tei-sweep-$2"
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker run -d --name "$NAME" --gpus all -p "$2:80" \
         -v "$HOME/.cache/huggingface:/data" "$IMAGE" \
         --model-id "$1" ${3:-} >/dev/null
     for _ in $(seq 1 90); do
         curl -fsS "http://localhost:$2/info" >/dev/null 2>&1 && { echo "  TEI $1 준비됨"; return 0; }
         sleep 2
     done
-    echo "  ⚠ TEI 가 안 뜬다: $1"; docker logs --tail 20 tei-sweep; return 1
+    echo "  ⚠ TEI 가 안 뜬다: $1"; docker logs --tail 20 "$NAME"; return 1
 }
 
 run_compare() {  # $1=꼬리표
@@ -118,6 +126,7 @@ run_compare() {  # $1=꼬리표
 
 echo
 echo "════════ 임베더 ════════"
+if [ "$STAGE" = rerank ]; then echo "(건너뜀 — STAGE=$STAGE)"; else
 for SPEC in "${EMBEDDERS[@]}"; do
     IFS='|' read -r MODEL QPFX DPFX <<< "$SPEC"
     [ "$QPFX" = "@QWEN@" ] && QPFX="$QWEN_INSTRUCT"
@@ -125,7 +134,9 @@ for SPEC in "${EMBEDDERS[@]}"; do
     echo; echo "── $MODEL"
     printf '   질의접두어 %q\n   문서접두어 %q\n' "$QPFX" "$DPFX"
     start_tei "$MODEL" 8095 || continue
-    # 판마다 인덱스를 새로 짓는다. 이름이 임베더까지 물고 있어 서로 안 덮는다.
+    # 판마다 인덱스를 새로 짓는다. **이름은 청크 이름에서 나오므로 판끼리 덮어쓴다**
+    # — 짓고 바로 재고 다음 판으로 가므로 결과는 맞지만, 끝나고 남는 인덱스는
+    # 마지막 판 것 하나뿐이다. 다시 보려면 그 판만 다시 지어야 한다.
     # **문서 접두어가 여기서 들어간다.** 색인과 측정에 같은 값을 써야 한다.
     export TEI_EMBED_URL=http://localhost:8095 EMBED_MODEL="$MODEL" \
            EMBED_QUERY_PREFIX="$QPFX" EMBED_DOC_PREFIX="$DPFX"
@@ -133,16 +144,18 @@ for SPEC in "${EMBEDDERS[@]}"; do
         || { echo "  색인 실패"; continue; }
     run_compare "embed_$TAG" || echo "  측정 실패"
 done
+fi
 unset TEI_EMBED_URL EMBED_MODEL EMBED_QUERY_PREFIX EMBED_DOC_PREFIX
 
 echo
 echo "════════ 리랭커 (임베더는 채택본으로 고정) ════════"
+if [ "$STAGE" = embed ]; then echo "(건너뜀 — STAGE=$STAGE)"; else
 IFS='|' read -r BASE_MODEL BASE_Q BASE_D <<< "${EMBEDDERS[0]}"
 export TEI_EMBED_URL=http://localhost:8095 EMBED_MODEL="$BASE_MODEL" \
        EMBED_QUERY_PREFIX="$BASE_Q" EMBED_DOC_PREFIX="$BASE_D"
 start_tei "$BASE_MODEL" 8095
 STORE=faiss $PY src/vectorstore.py --chunks "$SNAP" --force
-docker rm -f tei-sweep >/dev/null 2>&1 || true   # 임베딩 끝. VRAM 을 비우고 리랭커를 올린다
+# **임베더를 끄지 않는다.** Dense 가 질의를 임베딩해야 한다. 568M fp16 둘이면 약 3GB.
 
 # 인덱스는 위에서 만든 것 하나로 고정한다. **리랭커만 바뀐다** — 임베딩을 다시
 # 하면 변수가 둘이 되어 무엇이 성적을 움직였는지 못 가른다.
@@ -153,14 +166,18 @@ for MODEL in "${RERANKERS[@]}"; do
     STORE=faiss TEI_RERANK_URL=http://localhost:8096 RERANK_MODEL="$MODEL" \
         run_compare "rerank_$TAG" || echo "  측정 실패"
 done
+fi
 
 echo
 echo "════════ 표 ════════"
 ls "$OUT"/*.csv
+# `${EMBEDDERS[0]}` 는 `모델|질의접두어|문서접두어` 다. 접두어를 안 떼면 파일 이름이
+# `...-ko|query: |.csv` 가 되어 없는 파일을 찾는다 (9/8 실측).
+BASE_CSV="$OUT/embed_$(basename "${EMBEDDERS[0]%%|*}").csv"
 for A in "$OUT"/embed_*.csv; do
-    [ "$A" = "$OUT/embed_$(basename "${EMBEDDERS[0]}").csv" ] && continue
+    [ "$A" = "$BASE_CSV" ] && continue
     echo; echo "── $(basename "$A") vs 채택 임베더"
-    $PY scripts/retrieval/compare_runs.py "$A" "$OUT/embed_$(basename "${EMBEDDERS[0]}").csv" || true
+    $PY scripts/retrieval/compare_runs.py "$A" "$BASE_CSV" || true
 done
 echo; echo "── 리랭커"
 $PY scripts/retrieval/compare_runs.py "$OUT/rerank_$(basename "${RERANKERS[1]}").csv" \
