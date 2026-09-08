@@ -117,7 +117,10 @@ def compare(a, b, args, pairs, chunks):
 def main():
     """유형별로 틀린 문항을 원인과 함께 펼친다."""
     parser = argparse.ArgumentParser(description="틀린 문항을 눈으로 본다.")
-    parser.add_argument("--chunks", required=True, help="청크 이름 (__header 없이)")
+    parser.add_argument(
+        "--chunks", default=cfg.CHUNKS,
+        help=f"청크 이름. 생략하면 config/retrieval.py 의 CHUNKS ({cfg.CHUNKS})"
+    )
     parser.add_argument("--type", default="의역", help="질문 유형. all 이면 전부")
     parser.add_argument(
         "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"

@@ -44,7 +44,7 @@ def main():
     path = settings.PROCESSED / f"{cfg.DOCS}.jsonl"
     if not path.exists():
         print(f"X 전처리본이 없습니다: {path}")
-        print(f"  (이름은 .env 의 DOCS={cfg.DOCS} 에서 옵니다)")
+        print(f"  (이름은 config/retrieval.py 의 DOCS={cfg.DOCS} 에서 옵니다)")
         near = (
             sorted(p.name for p in settings.PROCESSED.glob("*.jsonl"))
             if settings.PROCESSED.exists()
@@ -53,7 +53,7 @@ def main():
         if near:
             print(f"  {settings.PROCESSED} 에 있는 것: {near}")
             print(
-                "  → .env 의 DOCS 를 이 중 하나로 맞추거나, prepare.py --build 로 만드세요"
+                "  → config/retrieval.py 의 DOCS 를 이 중 하나로 맞추거나, prepare.py --build 로 만드세요"
             )
         else:
             print(f"  {settings.PROCESSED} 가 비어 있습니다. prepare.py --build 부터.")
