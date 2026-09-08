@@ -76,7 +76,7 @@ if [ ! -s "$BAK" ]; then
     cp "$ROOT/docker/crontab.txt" "$BAK"
 fi
 crontab -r 2>/dev/null || true
-echo "크론 정지. 복원본 $BAK ($(grep -c refresh.sh "$BAK") 줄이 refresh.sh)"
+echo "크론 정지. 복원본 $BAK ($(grep -c "^[^#]*refresh\.sh" "$BAK") 줄이 refresh.sh)"
 
 cleanup() {
     echo
@@ -84,8 +84,8 @@ cleanup() {
     docker rm -f tei-sweep >/dev/null 2>&1 || true
     # 복원은 **확인까지 해야 복원이다.** 명령이 0을 뱉고도 빈 크론탭이 앉는 경우가 있다.
     crontab "$BAK" 2>/dev/null || true
-    if [ "$(crontab -l 2>/dev/null | grep -c refresh.sh)" -ge 1 ]; then
-        echo "크론 복원됨 — refresh.sh $(crontab -l | grep -c refresh.sh) 줄"
+    if [ "$(crontab -l 2>/dev/null | grep -c "^[^#]*refresh\.sh")" -ge 1 ]; then
+        echo "크론 복원됨 — refresh.sh $(crontab -l | grep -c "^[^#]*refresh\.sh") 줄"
     else
         echo "⚠ 크론 복원 실패. 손으로: crontab $ROOT/docker/crontab.txt"
     fi
