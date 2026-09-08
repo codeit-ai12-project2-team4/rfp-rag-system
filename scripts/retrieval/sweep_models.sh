@@ -19,9 +19,16 @@
 # **하나씩만** 띄운다. 둘을 같이 올리지 않는다.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+ROOT=$PWD
 
 PY=.venv/bin/python
-EVALSET=${EVALSET:-eval_qa_both}          # **명시한다.** 기본값에 기대지 않는다
+# **기본값을 안 둔다.** 안 주면 터진다 — 8/31 표가 세트를 안 적어 못 쓰게 됐고,
+# 그걸 다시 재려고 만든 스크립트가 또 기본값으로 옛 세트를 물면 같은 일이 난다.
+#
+# 자동 관리 세트(`*.meta.json` 이 있는 것)를 쓰면 **청크가 자란 만큼 세트가 다시
+# 만들어진다.** 설계된 동작이지만, 스윕 도중에 그러면 판끼리 다른 문항을 재게
+# 된다. 도장이 없는 고정 세트를 쓰는 게 맞다 (예: 어댑터가 만든 eval_160_ours).
+: "${EVALSET:?EVALSET 를 지정하세요 — 예: EVALSET=eval_160_ours bash $0}"
 LIVE=${LIVE:-chunks_cleaned_documents__pipeline}
 SNAP=sweep_$(date +%m%d)                  # 실험 전용 청크 이름
 OUT=outputs/eval_results/sweep_$(date +%m%d)
@@ -53,17 +60,35 @@ RERANKERS=(
 mkdir -p "$OUT"
 echo "결과 → $OUT"
 
-# ── ① 크론 정지 (백업 먼저. crontab -r 은 백업 없이 하면 통째로 날아간다) ──
-crontab -l > /tmp/crontab.sweep.bak 2>/dev/null || true
+# ── ① 크론 정지 ──
+#
+# **살아있는 크론탭을 그대로 백업하면 안 된다.** 앞판이 트랩을 못 타고 죽었으면
+# (Ctrl-C 두 번, kill -9, 세션 끊김) 크론은 **이미 꺼져 있다.** 그 상태에서
+# `crontab -l` 을 받으면 빈 파일이 백업으로 덮이고, 트랩이 그 빈 걸 "복원"해서
+# 크론이 영영 사라진다. 백업 파일 하나에 서비스 일정을 맡기는 구조 자체가 틀렸다.
+#
+# 정본은 저장소 안에 있다 — `docker/crontab.txt`. 설치도 원래 이 파일로 한다
+# (`crontab docker/crontab.txt`). 백업이 비면 여기서 되살린다.
+BAK=/tmp/crontab.sweep.bak
+crontab -l > "$BAK" 2>/dev/null || true
+if [ ! -s "$BAK" ]; then
+    echo "⚠ 크론이 이미 꺼져 있다 — 앞판이 비정상 종료했을 수 있다. 정본에서 복원한다."
+    cp "$ROOT/docker/crontab.txt" "$BAK"
+fi
 crontab -r 2>/dev/null || true
-echo "크론 정지. 백업 /tmp/crontab.sweep.bak"
+echo "크론 정지. 복원본 $BAK ($(grep -c refresh.sh "$BAK") 줄이 refresh.sh)"
 
 cleanup() {
     echo
     echo "정리 중…"
     docker rm -f tei-sweep >/dev/null 2>&1 || true
-    crontab /tmp/crontab.sweep.bak 2>/dev/null && echo "크론 복원됨" || echo "⚠ 크론 복원 실패 — crontab /tmp/crontab.sweep.bak"
-    crontab -l | head -3
+    # 복원은 **확인까지 해야 복원이다.** 명령이 0을 뱉고도 빈 크론탭이 앉는 경우가 있다.
+    crontab "$BAK" 2>/dev/null || true
+    if [ "$(crontab -l 2>/dev/null | grep -c refresh.sh)" -ge 1 ]; then
+        echo "크론 복원됨 — refresh.sh $(crontab -l | grep -c refresh.sh) 줄"
+    else
+        echo "⚠ 크론 복원 실패. 손으로: crontab $ROOT/docker/crontab.txt"
+    fi
 }
 trap cleanup EXIT
 
