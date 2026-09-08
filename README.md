@@ -1,7 +1,7 @@
 # 📑 RFP RAG SYSTEM
 
 <div align="center">
-  <img src=".images/baner_image.png" width="100%">
+  <img src=".team-info/.images/baner_image.png" width="100%">
 </div>
 
 
@@ -33,10 +33,10 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
 
 <table>
     <tr align="center">
-        <td><img src=".images/hs_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src=".images/ch_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src=".images/ms_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src=".images/jy_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".team-info/.images/hs_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".team-info/.images/ch_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".team-info/.images/ms_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".team-info/.images/jy_image.png" width="120" height="120" style="border-radius:50%;"></td>
     </tr>
     <tr align="center">
         <td><b>권혁상</b></td>
