@@ -736,6 +736,14 @@ def _notices(chunks=None):
         ids = [doc_id for _, doc_id in sorted(members)]
         for _, doc_id in members:
             found[doc_id]["siblings"] = ids
+
+    # **뺀 사실을 화면에 알린다.** 컨설턴트가 옛 문서를 이미 받아 갔을 수 있다.
+    # 조용히 사라지면 "어제 본 그 내용이 왜 없지" 가 된다. 문구는 사람이
+    # `config/retrieval.py: REPLACED_DOCS` 에 적어 둔 그대로 준다.
+    for gone, why in cfg.REPLACED_DOCS.items():
+        no, _ = chunking.split_doc_id(gone)
+        for _, doc_id in family.get(no, []):
+            found[doc_id].setdefault("교체안내", []).append(why)
     return found
 
 

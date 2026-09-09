@@ -44,6 +44,7 @@ for _folder in (_ROOT / "src", _ROOT):
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from config import retrieval as _cfg
 from config import settings
 
 # RFP 목차 헤딩 패턴. 위에 있는 것부터 검사한다.
@@ -608,7 +609,13 @@ def load_chunks(name):
     # **여기서 한 번만 거른다.** 검색·목록·평가가 전부 이 함수를 지나므로,
     # 여기 걸면 서비스와 측정이 같은 코퍼스를 본다. 부르는 쪽마다 걸면
     # 이번 프로젝트에서 네 번 난 그 어긋남(설정이 갈라지는 것)이 또 난다.
-    return drop_stale_revisions(rows)
+    rows = drop_stale_revisions(rows)
+    # 사람이 확인해 적어 둔 것도 뺀다. **규칙을 섞지 않는다** —
+    # 위는 본문 비교, 이건 목록. 섞으면 왜 빠졌는지 못 가린다.
+    return [
+        c for c in rows
+        if str(c.metadata.get("doc_id") or "") not in _cfg.REPLACED_DOCS
+    ]
 
 
 def _row_to_document(row):

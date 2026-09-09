@@ -63,6 +63,29 @@ EVALSET = os.environ.get("EVALSET", "eval_qa_both")
 CHUNKS = os.environ.get("CHUNKS", "chunks_cleaned_documents__pipeline")
 
 
+# 발주기관이 **잘못 올린 첨부.** 차수가 오르며 문서가 통째로 교체된 경우다.
+#
+# 차수 필터(`chunking.drop_stale_revisions`)로는 못 거른다 — 본문이 다른 게
+# 맞기 때문이다. 유사도로 가를 수도 없다: 9/9 실측에서 **완전히 다른 두 사업의
+# 제안요청서가 0.918** 이었다. 나라장터 문서는 어휘가 겹쳐(계약·입찰·과업)
+# 다른 사업끼리도 0.9 가 나온다. 진짜 개정(마감일 한 줄)은 0.999 였다.
+# 그 사이에 임계값을 놓을 자리가 없다.
+#
+# 그래서 **사람이 확인하고 이유를 적는다.** 후보는 자동으로 찾는다:
+#
+#     python scripts/retrieval/check_revisions.py --diff
+#
+# 차수가 여럿인 공고만 나오므로(322건 중 2건) 눈으로 볼 수 있는 양이다.
+# 값은 화면에 그대로 보여주는 문구다 — 컨설턴트가 옛 문서를 이미 받아 갔을 수
+# 있으니 "왜 사라졌나" 를 알아야 한다.
+REPLACED_DOCS = {
+    "R26BK01719775-0": (
+        "0차 첨부가 다른 사업(공공기술기반 창업 아이디어 특허 컨설팅 및 출원 지원)의 "
+        "제안요청서였습니다. 1차에서 올바른 문서로 교체되었습니다."
+    ),
+}
+
+
 def chunk_name(docs=None, how=None, size=None, overlap=None):
     """청크 세트 이름. 이름이 곧 실험 조건이다.
 
