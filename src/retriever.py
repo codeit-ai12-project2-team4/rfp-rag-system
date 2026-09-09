@@ -572,9 +572,24 @@ def search_notices(
         if kin:
             row["siblings"] = kin
     rows.sort(key=lambda r: r["score"], reverse=True)
-    for row in rows:
+
+    # **한 공고는 한 장.** 본문이 다른 차수는 색인에 둘 다 남는다(비교 재료다).
+    # 그런데 목록까지 두 줄이면 제목·기관·예산·마감이 다 같은 카드가 나란히
+    # 떠서 중복으로 보인다. 색인은 그대로 두고 **화면에서만** 접는다 —
+    # 상세는 `siblings` 로 여전히 두 차수를 다 넘긴다.
+    #
+    # 대표는 **점수가 제일 높은 차수**다. 최신을 강제하지 않는다: 질문에 맞는
+    # 대목이 옛 차수에 있으면 카드가 `0차 (옛)` 로 뜨는 게 맞다. 그게 "그 내용은
+    # 옛 차수에 있다" 는 정보다.
+    picked, seen = [], set()
+    for row in rows:  # 이미 점수 내림차순이라 먼저 만난 것이 대표다
+        no, order = chunking.split_doc_id(row["doc_id"])
+        if order is not None and no in seen:
+            continue
+        seen.add(no)
         row["score"] = round(row["score"], 6)
-    return rows[:top_n]
+        picked.append(row)
+    return picked[:top_n]
 
 
 @lru_cache(maxsize=1)
