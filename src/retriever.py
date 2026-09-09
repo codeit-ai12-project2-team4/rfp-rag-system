@@ -341,10 +341,16 @@ def format_context(chunks, generation=False):
         close = value("bid_close_at")[:10]
         amount = value("budget")
         kind = value("budget_kind") or "공고 금액"
+        # **차수를 넣는다.** 같은 공고의 다른 차수가 같이 들어오면(본문이
+        # 달라 남겨 둔 경우) `notice_no` 까지가 글자 하나까지 같아서, 모델이
+        # 서로 모순되는 두 블록을 같은 라벨로 받고 아무거나 고른다.
+        # 차수는 메타에 없다 — doc_id 를 쪼갠다. 재색인이 필요 없다.
+        _, order = chunking.split_doc_id(meta.get("doc_id") or "")
         parts = [
             value("title"),
             value("agency"),
             value("notice_no"),
+            f"{order}차 공고" if order is not None else "",
             f"마감 {close}" if close else "",
             f"{kind} {money(amount)}" if amount else "",
         ]
@@ -535,6 +541,10 @@ def search_notices(
             row = found[doc_id] = _drop_nan(
                 {
                     "doc_id": doc_id,
+                    # 목록에서 "3차" 배지를 달 수 있게. 본문이 같은 옛 차수는
+                    # `chunking.drop_stale_revisions` 가 이미 뺐으므로, 여기
+                    # 두 줄로 보이는 건 **본문이 실제로 다른** 경우뿐이다.
+                    "차수": chunking.split_doc_id(doc_id)[1],
                     "title": _plain(meta.get("title")),
                     "agency": _plain(meta.get("agency")),
                     "budget": _plain(meta.get("budget")),
@@ -553,6 +563,14 @@ def search_notices(
         for r in found.values()
         if _passes(r, min_budget, max_budget, agency, closes_after)
     ]
+    # **형제 차수를 여기서도 채운다.** 화면은 목록 행을 sessionStorage 에 담아
+    # 상세로 넘긴다. 여기 없으면 상세가 질문할 때 자기 doc_id 하나만 넘기고,
+    # 본문이 다른 옛 차수는 후보에 아예 안 든다 — "뭐가 바뀌었나" 를 못 답한다.
+    everything = _notices(chunks)
+    for row in rows:
+        kin = (everything.get(row["doc_id"]) or {}).get("siblings")
+        if kin:
+            row["siblings"] = kin
     rows.sort(key=lambda r: r["score"], reverse=True)
     for row in rows:
         row["score"] = round(row["score"], 6)
@@ -684,6 +702,7 @@ def _notices(chunks=None):
         meta = chunk.metadata
         found[doc_id] = _drop_nan({
             "doc_id": doc_id,
+            "차수": chunking.split_doc_id(doc_id)[1],
             "title": _plain(meta.get("title")),
             "agency": _plain(meta.get("agency")),
             "budget": _plain(meta.get("budget")),
@@ -702,6 +721,21 @@ def _notices(chunks=None):
         row = found.get(str(chunk.metadata.get("doc_id") or ""))
         if row is not None:
             row["청크수"] += 1
+
+    # **형제 차수를 서버가 알려준다.** 본문이 다른 차수는 코퍼스에 둘 다 남으므로
+    # (`chunking.drop_stale_revisions`), 화면이 "이 공고는 1차도 있다" 를 띄우고
+    # 질문할 때 두 차수를 같이 넘길 수 있어야 한다. 목록에서 넘겨준 값에 기대면
+    # 주소 직접 입력·출처 클릭으로 들어왔을 때 빈다 — `notice_one` 이 있는 이유와
+    # 같은 이유다.
+    family = {}
+    for doc_id in found:
+        no, order = chunking.split_doc_id(doc_id)
+        if order is not None:
+            family.setdefault(no, []).append((order, doc_id))
+    for members in family.values():
+        ids = [doc_id for _, doc_id in sorted(members)]
+        for _, doc_id in members:
+            found[doc_id]["siblings"] = ids
     return found
 
 
@@ -724,6 +758,9 @@ def sources(chunks):
             {
                 "n": i,
                 "doc_id": chunk.metadata.get("doc_id"),
+                # 화면이 "3차 공고" 배지를 달 수 있게. 프롬프트 머리와 같은 값이라
+                # 답변과 출처가 어긋나지 않는다.
+                "차수": chunking.split_doc_id(chunk.metadata.get("doc_id") or "")[1],
                 "title": chunk.metadata.get("title"),
                 "agency": chunk.metadata.get("agency"),
                 "chunk_id": chunk.metadata.get("chunk_id"),
