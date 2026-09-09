@@ -1,16 +1,23 @@
 # 📑 RFP RAG SYSTEM
 
 <div align="center">
-  <img src=".team-info/.images/baner_image.png" width="100%">
+  <img src=".images/baner_image.png" width="100%">
 </div>
 
 
 
 Repo URL : [![Repo](https://img.shields.io/badge/GitHub-Repository-181717?style=flat&logo=github)](https://github.com/codeit-ai12-project2-team4/rfp-rag-system)
 
-팀 보고서 URL : `[노션 팀 보고서 링크]`
+Team Notion : `[노션 페이지 링크]`
 
-협업일지 : `[일지 PDF 링크]`
+Team Report URL : `[노션 팀 보고서 링크]`
+
+**협업일지**
+
+- 권혁상 : `[링크]`
+- 안찬형 : `[링크]`
+- 최민식 : `[링크]`
+- 최중열 : `[링크]`
 
 <br/>
 
@@ -33,10 +40,10 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
 
 <table>
     <tr align="center">
-        <td><img src=".team-info/.images/hs_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src=".team-info/.images/ch_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src=".team-info/.images/ms_image.png" width="120" height="120" style="border-radius:50%;"></td>
-        <td><img src=".team-info/.images/jy_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".images/hs_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".images/ch_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".images/ms_image.png" width="120" height="120" style="border-radius:50%;"></td>
+        <td><img src=".images/jy_image.png" width="120" height="120" style="border-radius:50%;"></td>
     </tr>
     <tr align="center">
         <td><b>권혁상</b></td>
@@ -81,6 +88,7 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
 
 ```
 📦 rfp-rag-system
+┣ 📂 .images
 ┣ 📂 config
 ┃ ┣ 📂 prompts
 ┃ ┣ 📝 __init__.py
