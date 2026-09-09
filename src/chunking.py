@@ -544,6 +544,11 @@ def drop_stale_revisions(chunks, verbose=False):
         chunks: 청크 리스트.
         verbose: 무엇을 뺐는지 찍을지.
 
+    **여기서 빼도 벡터 테이블에는 남아 있다.** 청크 파일이 진실이고 테이블은
+    사본이라, 맞추는 건 `lance_store.sync_docs` 다(청크에 없는 문서를 지운다).
+    BM25 와 목록은 이 함수를 지나므로 바로 듣지만 Dense 는 안 듣는다.
+    필터를 바꿨으면 `python src/lance_store.py --sync` 를 한 번 돌린다.
+
     Returns:
         옛 중복 차수를 뺀 리스트. 뺄 게 없으면 받은 것을 그대로 돌려준다.
     """
