@@ -1,20 +1,29 @@
-"""공고 차수가 여럿인 건을 다루기 전에, **다룰 값이 있는지** 먼저 본다.
+"""공고 차수 처리를 확인한다 — 규칙 자체와, 코퍼스의 실제 상태.
 
     python scripts/retrieval/check_revisions.py
 
-세 가지를 잰다. 하나라도 답이 "없다" 면 계획을 접거나 바꿔야 한다.
+`chunking.drop_stale_revisions` 자체 검사를 먼저 돌리고(코퍼스 없이 도는
+어서션 몇 줄), 그 다음 코퍼스에 대고 세 가지를 잰다. 9/9 에 처음 돌렸을 때
+답이 이랬고, 그 답이 지금 구현을 정했다.
 
     ① 차수가 여럿인 공고가 몇 건이고, **본문이 실제로 다른가**
-       차수만 오르고 첨부가 같으면 비교할 게 없다. 그러면 목록에서
-       접어 버리는 게 맞고, 비교 기능은 지을 이유가 없다.
+       9/9: 공고 320건 중 10건. 그중 **9건이 유사도 1.000** — 마감만 미루고
+       차수를 올린 것이다. 그래서 "최신만 남긴다" 가 아니라 **본문 해시로
+       가른다**. 내용이 갈린 1건(R26BK01719775)은 남겨야 "1차와 뭐가
+       달라졌나" 를 답할 수 있다.
 
     ② 평가 세트가 그 공고들을 건드리나
-       건드리면 목록 접기가 지표를 움직인다. 앞의 표들과 비교가 깨진다.
+       9/9: 0문항. 그래서 거르기가 지표를 안 움직인다. 걸리면 접기 전후를
+       둘 다 재서 실어야 한다.
 
-    ③ `Dense` 후필터가 실제로 굶는가
+    ③ `Dense` 후필터가 굶는가
        `Dense.search` 는 전역 상위 `k*10` 을 뽑고 **그 다음에** 거른다.
-       그 공고 청크가 그 안에 없으면 0개가 남는다. 차수 둘을 주면 같은
-       자리를 나눠 쓴다. 굶으면 LanceDB 사전필터로 바꿔야 한다.
+       그 공고 청크가 그 안에 없으면 0개가 남는다.
+       9/9: 안 굶었다. 대신 두 차수가 정확히 반반씩 나왔다(6:6·15:15·11:11)
+       — 굶음이 아니라 **낭비**였고, 그게 거르기의 근거다. 코퍼스가 커지면
+       300 천장에 걸릴 수 있으니 이 칸은 계속 본다. 굶기 시작하면 LanceDB
+       사전필터로 바꾼다 — `lance_store.delete_docs` 가 `doc_id IN (…)` 절을
+       만드는 코드를 이미 갖고 있다.
 """
 
 import sys
@@ -38,7 +47,60 @@ def split_id(doc_id):
     return no, int(order)
 
 
+class _Doc:
+    """Document 흉내. 이 규칙이 보는 건 본문과 doc_id 둘뿐이다."""
+
+    def __init__(self, text, doc_id):
+        self.page_content = text
+        self.metadata = {"doc_id": doc_id}
+
+
+def selftest():
+    """`drop_stale_revisions` 규칙을 코퍼스 없이 확인한다. **본문으로만 판단하나.**
+
+    틀리면 조용히 나빠진다. 본문이 다른 차수를 지우면 "1차와 뭐가 달라졌나" 가
+    답할 수 없는 질문이 되고, 같은 차수를 안 지우면 pool 절반이 같은 내용으로
+    채워진다. 어느 쪽도 화면에 오류로 안 보인다. 그래서 코퍼스를 보기 전에
+    이것부터 돌린다.
+    """
+    def ids(chunks):
+        return [c.metadata["doc_id"] for c in chunks]
+
+    drop = chunking.drop_stale_revisions
+
+    assert chunking.split_doc_id("R26BK01719775-1") == ("R26BK01719775", 1)
+    # 처음 받은 100건은 `{기관}_{사업명}` 이라 규칙 밖이다. 건드리면 안 된다.
+    assert chunking.split_doc_id("행안부_클라우드전환")[1] is None
+
+    # 실측 9건 — 마감만 미루고 차수를 올린 경우
+    got = drop([_Doc("가나", "A-0"), _Doc("다라", "A-0"),
+                _Doc("가나", "A-1"), _Doc("다라", "A-1")])
+    assert ids(got) == ["A-1", "A-1"], ids(got)
+
+    # 실측 나머지 1건 — 본문이 실제로 갈렸다. **비교 재료다.**
+    assert ids(drop([_Doc("옛", "B-0"), _Doc("새", "B-1")])) == ["B-0", "B-1"]
+
+    # 차수 셋 — 최신과 같은 것만 뺀다
+    got = drop([_Doc("옛", "E-0"), _Doc("새", "E-1"), _Doc("새", "E-2")])
+    assert ids(got) == ["E-0", "E-2"], ids(got)
+
+    # 청크 순서가 다르면 다른 문서다 (낱말을 재배열한 개정일 수 있다)
+    got = drop([_Doc("가", "F-0"), _Doc("나", "F-0"),
+                _Doc("나", "F-1"), _Doc("가", "F-1")])
+    assert len(got) == 4, ids(got)
+
+    # 뺄 게 없으면 **받은 객체를 그대로** 돌려준다. `load_chunks` 가 lru_cache 로
+    # 같은 리스트를 돌려쓰므로 새 리스트를 만들면 공짜로 복사가 는다.
+    one = [_Doc("가", "C-0")]
+    assert drop(one) is one
+    odd = [_Doc("가", "행안부_사업"), _Doc("가", "행안부_사업")]
+    assert drop(odd) is odd
+
+    print("자체 검사 통과\n")
+
+
 def main():
+    selftest()
     chunks = chunking.load_chunks(cfg.CHUNKS)
     print(f"청크 {len(chunks):,}개 · {cfg.CHUNKS}\n")
 
