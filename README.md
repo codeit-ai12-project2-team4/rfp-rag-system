@@ -8,8 +8,6 @@
 
 Repo URL : [![Repo](https://img.shields.io/badge/GitHub-Repository-181717?style=flat&logo=github)](https://github.com/codeit-ai12-project2-team4/rfp-rag-system)
 
-Team Notion : `[노션 페이지 링크]`
-
 Team Report URL : `[노션 팀 보고서 링크]`
 
 **협업일지**
