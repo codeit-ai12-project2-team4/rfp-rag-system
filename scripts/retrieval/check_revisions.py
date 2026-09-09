@@ -36,6 +36,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 import chunking  # noqa: E402
 from config import retrieval as cfg  # noqa: E402
+from config import settings  # noqa: E402
 from evaluation import evalset as ev  # noqa: E402
 
 
@@ -142,19 +143,36 @@ def main():
         print("   → 남은 것은 전부 **본문이 실제로 다른** 차수다. 비교 재료다.")
 
     # 무엇이 달라졌는지 실제로 본다. **문항을 지어내지 않으려면 이걸 봐야 한다.**
+    #
+    # **화면에 쏟지 않는다.** 전처리가 표를 평탄화해서 같은 문구가 수십 번
+    # 반복되는데, 그대로 찍으면 터미널 스크롤백이 통째로 날아간다(9/9).
+    # 파일로 쓰고 여기서는 몇 줄만 미리 보여준다.
     if "--diff" in sys.argv:
         from difflib import unified_diff  # noqa: PLC0415 - 이 갈래에서만 쓴다
-        for no, byorder in sorted(dup.items()):
-            orders = sorted(byorder)
-            print(f"\n   ── {no}  {orders[0]}차 → {orders[-1]}차")
-            lines = list(unified_diff(
-                byorder[orders[0]].splitlines(),
-                byorder[orders[-1]].splitlines(),
-                lineterm="", n=1,
-            ))
-            for line in lines[2:]:  # +++/--- 머리는 뺀다
-                if line.startswith(("+", "-")) and line[1:].strip():
-                    print(f"     {line[:160]}")
+
+        out = settings.EVAL_RESULTS / "revisions_diff.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            for no, byorder in sorted(dup.items()):
+                orders = sorted(byorder)
+                lines = [
+                    line for line in unified_diff(
+                        byorder[orders[0]].splitlines(),
+                        byorder[orders[-1]].splitlines(),
+                        lineterm="", n=0,
+                    )
+                    if line.startswith(("+", "-")) and line[1:].strip()
+                    and not line.startswith(("+++", "---"))
+                ]
+                f.write(f"\n===== {no}  {orders[0]}차 → {orders[-1]}차  "
+                        f"({len(lines)}줄) =====\n")
+                f.write("\n".join(lines) + "\n")
+                print(f"   {no}  {orders[0]}차 → {orders[-1]}차  바뀐 줄 {len(lines)}개")
+                for line in lines[:4]:
+                    print(f"     {line[:90]}")
+                if len(lines) > 4:
+                    print(f"     … 나머지는 파일에")
+        print(f"   → {out}")
 
     # ② 평가 세트가 이 공고들을 건드리나
     print(f"\n② 평가 세트 {cfg.EVALSET}")
