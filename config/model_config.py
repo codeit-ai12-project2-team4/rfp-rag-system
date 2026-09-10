@@ -1,0 +1,136 @@
+"""모델별 설정값을 정의하는 모듈.
+
+새 모델을 추가할 때는 이 파일의 MODEL_CONFIGS에 항목을 추가하기만 하면 되고,
+실행 코드(src/generation.py)는 건드릴 필요가 없습니다.
+
+provider 는 셋이다.
+
+    openai      OpenAI API. GPU 를 안 쓴다. 팀 한도 $20.
+    sglang      VM 의 SGLang 컨테이너. **한 번에 한 모델만** 올라간다.
+    huggingface transformers 로 프로세스 안에 직접. 지금은 안 쓰지만 평가
+                스크립트가 부를 수 있어 남겨 둔다.
+
+**mem 값은 실측해서 조정하는 값이다.** L4 24GB 에 TEI 셋이 약 4GB 상주하므로
+생성용은 20GB(=0.83)뿐이다. OOM 이 나면 내리고, KV 캐시가 모자라 느리면 올린다.
+"""
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ModelConfig:
+    """모델 하나에 대한 설정.
+
+    Attributes:
+        provider: "openai" | "sglang" | "huggingface". generate_answer()가 이 값으로
+            어떤 실행 함수를 쓸지 분기한다.
+        model: 실제 호출할 모델명 (예: "gpt-5-mini", 또는 HuggingFace repo id).
+        reasoning_effort: OpenAI 모델용. "minimal" | "low" | "medium" | "high".
+        verbosity: OpenAI 모델용. "low" | "medium" | "high".
+        dtype: HuggingFace 모델용. "bfloat16" | "float16" | "float32".
+        device_map: HuggingFace 모델용 device_map 값 (예: "auto").
+        max_new_tokens: 생성 토큰 상한. sglang / huggingface 에서 쓴다.
+        mem: sglang 용 `--mem-fraction-static`. GPU **전체** 대비 비율.
+        args: sglang 서버에 그 모델에만 붙일 추가 인자 문자열.
+        extra: HuggingFace pipeline() 호출 시 추가로 넘길 키워드 인자.
+        usd_per_call: 문항 하나를 처리하는 데 드는 대략의 달러. **여기가 유일한
+            출처다** — UI 의 예상 비용도 평가 실행기도 이 값을 쓴다. 두 군데에
+            적으면 한쪽만 고치게 된다. `sglang`/`huggingface` 는 우리 GPU 라 0 이다.
+            RFP 발췌가 길어 입력이 5~6천 자쯤 되는 걸 기준으로 잡았다
+            (9/8 실측: mini 로 191문항 답변+채점에 $1.34).
+    """
+
+    provider: str
+    model: str
+    reasoning_effort: str | None = None
+    verbosity: str | None = None
+    dtype: str | None = None
+    device_map: str | None = None
+    max_new_tokens: int | None = None
+    mem: str | None = None
+    args: str = ""
+    extra: dict = field(default_factory=dict)
+    usd_per_call: float = 0.0
+
+
+MODEL_CONFIGS = {
+    # --- 외부 API. GPU 를 안 쓰므로 교체 대기가 없다 ---------------------
+    "mini": ModelConfig(
+        provider="openai",
+        model="gpt-5-mini",
+        reasoning_effort="medium",
+        verbosity="medium",
+        usd_per_call=0.0050,
+    ),
+    # gpt-5 는 reasoning 토큰을 먼저 만들고 그동안 content 를 하나도 안 준다.
+    # 스트리밍을 붙여도 그 구간은 화면이 빈 채로 기다린다 — 전송 문제가 아니라
+    # 모델이 아직 안 쓰고 있는 것이다. "minimal" 은 그 구간을 거의 없앤다.
+    # **`mini` 를 안 고치고 옆에 둔다.** 지금까지의 E2E 점수가 medium 으로 잰
+    # 것이라, 값을 바꾸면 비교 대상이 사라진다. 둘 다 재고 나서 고른다.
+    # usd_per_call 은 medium 기준값을 그대로 뒀다 — reasoning 이 줄면 실제로는
+    # 더 싸므로 화면의 예상 비용은 과대평가다(모자란 것보다 낫다).
+    "mini-fast": ModelConfig(
+        provider="openai",
+        model="gpt-5-mini",
+        reasoning_effort="minimal",
+        verbosity="medium",
+        usd_per_call=0.0050,
+    ),
+    "nano": ModelConfig(
+        provider="openai",
+        model="gpt-5-nano",
+        reasoning_effort="low",
+        verbosity="low",
+        usd_per_call=0.0020,
+    ),
+    # --- VM 안. 고르면 그 모델로 컨테이너가 갈아끼워진다 ------------------
+    # 가중치 크기(fp16)와 mem 값. 남는 20GB 안에서 KV 캐시까지 잡아야 한다.
+    # kakaocorp/kanana-nano-2.1b-instruct 는 뺐다 (2026-09-02).
+    # SGLang 이미지의 transformers 가 LlamaConfig 를 검증할 때
+    #     ValueError: The hidden size (1792) is not a multiple of
+    #                 the number of attention heads (24)
+    # 로 launch 단계에서 죽는다. 이 모델은 head_dim=128 을 config 에 명시해서
+    # hidden_size / num_heads 와 일부러 다르게 잡은 건데(1792 vs 24*128=3072),
+    # 검증기가 head_dim 을 안 본다. 우리 설정 문제가 아니라 이미지 쪽 문제다.
+    # **되살리려면 이미지를 바꿔서 실제로 떠야 확인된다.** 목록에만 넣으면
+    # 사용자가 고르고 15분을 기다린 뒤 에러를 본다.
+    "exaone": ModelConfig(  # 2.4B / 약 4.8GB
+        provider="sglang",
+        model="LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct",
+        max_new_tokens=512,
+        mem="0.38",
+    ),
+    "qwen": ModelConfig(  # 3.09B / 약 6.2GB
+        provider="sglang",
+        model="Qwen/Qwen2.5-3B-Instruct",
+        max_new_tokens=512,
+        mem="0.45",
+    ),
+    # --- 8B 둘은 잠가 뒀다 (2026-09-02) ---------------------------------
+    # 이유는 디스크다. 둘이 합쳐 32GB 인데 SGLang 이미지와 tei-cache 까지
+    # 얹으면 VM 이 버티는지 아직 안 재 봤다. GPU 는 오히려 여유가 있는 편이라
+    # (mem 0.78 = 18.7GB, 가용 19.14GB) 막힌 건 VRAM 이 아니다.
+    # luxia8b 는 그 위에 베이스 모델이라 채팅 템플릿이 없다.
+    #
+    # 되살리는 순서:
+    #   1. df -h / docker system df 로 여유부터 본다 (한 모델에 16GB + 여유)
+    #   2. 주석을 푼다
+    #   3. python scripts/check_gen_store.py --gen kanana8b
+    #   4. Load weight begin 의 avail mem 이 mem*24 보다 큰지 로그로 확인.
+    #      OOM 이면 mem 을 0.74 로 내린다 (여유가 0.4GB 뿐이다)
+    #
+    # "kanana8b": ModelConfig(  # 8B / 약 16GB. 혼자만 올라간다
+    #     provider="sglang",
+    #     model="kakaocorp/kanana-1.5-8b-instruct-2505",
+    #     max_new_tokens=512,
+    #     mem="0.78",
+    # ),
+    # "luxia8b": ModelConfig(  # 8B / 약 16GB
+    #     # 베이스 모델이라 채팅 템플릿이 없다. Llama-3 것을 씌워서 쓴다.
+    #     provider="sglang",
+    #     model="saltlux/Ko-Llama3-Luxia-8B",
+    #     max_new_tokens=512,
+    #     mem="0.78",
+    #     args="--chat-template llama-3-instruct",
+    # ),
+}

@@ -76,6 +76,7 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 test*.ipynb
+*.ipynb
 
 # IPython
 profile_default/
@@ -211,3 +212,24 @@ chroma_db/
 # ── OS ──
 .DS_Store
 Thumbs.db
+
+# CJY 개인 설정(uv 관련)
+src/rfp_rag_system
+.python-version
+pyproject.toml
+data/
+notebooks/
+uv.*
+test/
+# docker/ 통째로 무시하면 compose 파일이 VM 에 안 올라간다. 무거운 건 캐시뿐이다.
+docker/*-cache/
+evalsets/
+_to_delete/
+docs/
+.serena/
+
+# ── 팀 구조 정리 (2026-08-26) ──
+outputs/
+data/raw/
+data/processed/
+data/metadata/

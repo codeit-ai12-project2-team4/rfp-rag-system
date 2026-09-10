@@ -1,0 +1,232 @@
+"""답변 파일을 채점한다. 네 지표 중 셋은 LLM 없이 잰다.
+
+    python scripts/retrieval/score_answers.py \\
+        outputs/eval_results/answers_v8_gen.jsonl \\
+        outputs/eval_results/answers_v8_search.jsonl
+
+    # 충실성까지 (LLM 호출. 문항수 × 파일수 만큼 든다)
+    python scripts/retrieval/score_answers.py ... --judge --model nano
+
+지표:
+    인용표시율    답변에 [n] 을 하나라도 달았나            공짜
+    인용정확도    그 [n] 이 실제 발췌 번호 범위 안인가      공짜
+    숫자근거율    답변의 숫자가 발췌 안에 있는 것인가       공짜
+    물러섬        근거가 없을 때 모른다고 했나              공짜
+    충실성        발췌에 있는 내용만 말했나 (YES/NO)        LLM
+
+**Groundedness 는 따로 안 잰다.** 충실성과 사실상 같은 것을 묻는데 LLM 호출만
+두 배가 된다. 문장 단위로 쪼개 재고 싶어지면 그때 붙인다.
+"""
+
+import argparse
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
+
+CITE = re.compile(r"\[(\d+)\]")
+NUMBER = re.compile(r"[\d,]+")
+BACKED_OFF = re.compile(r"확인되지\s*않|찾을\s*수\s*없|명시되어\s*있지\s*않|정보가\s*없")
+
+
+def cite_marks(text):
+    """`[1] [2] …` 에서 번호만 뽑는다."""
+    return [int(n) for n in CITE.findall(text)]
+
+
+# 정답 문자열 앞에 붙은 글머리표·번호·라벨. 원문을 그대로 잘라 온 탓에 남는다.
+#     "마. 계약방법 : 협상에 의한 계약 (기술평가90%, 가격평가10%)"
+#                    ^^^^^^^^^^^^^^^ 모델은 여기부터 답한다
+GOLD_PREFIX = re.compile(r"^[\s\-•*○◦□ㅁ]*(?:[가-힣0-9]{1,2}[.)]\s*)?(?:[^:\n]{1,14}\s*:\s*)?")
+
+
+def gold_in(answer, keywords):
+    """정답이 답변에 들어 있나. **글자 그대로가 아니라 공백을 지우고 본다.**
+
+    전에는 `k in answer` 였다. 원문에서 잘라 온 정답에는 `마. 계약방법 : ` 같은
+    접두어가 붙어 있고, 모델은 서식을 바꿔 답한다. 그래서 정답을 맞혀도 0이
+    나왔다 — 배점 유형 정답포함 0.091 의 정체다.
+
+    **한계는 남는다.** 정답이 문장 하나를 통째로 잘라 온 경우(`○ 신규종합점수체계
+    적용 설계(안) 마련을 위한 정보 제공 수집 필요`)는 모델이 말을 바꾸면 어차피
+    못 잡는다. 그건 지표가 아니라 **평가 세트의 한계**다.
+    """
+    if not keywords:
+        return None
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    body = re.sub(r"\s+", "", answer)
+    for keyword in keywords:
+        if not keyword:
+            continue
+        gold = re.sub(r"\s+", "", GOLD_PREFIX.sub("", str(keyword)))
+        if gold and gold in body:
+            return 1.0
+    return 0.0
+
+
+def score(row):
+    """한 문항의 공짜 지표. 값이 없으면 None — 평균에서 뺀다."""
+    answer = row.get("answer") or ""
+    context = row.get("context") or ""
+    available = set(cite_marks(context))  # 발췌 머리의 [1] [2] …
+    used = cite_marks(answer)
+
+    numbers = {n.replace(",", "") for n in NUMBER.findall(answer) if len(n) > 1}
+    # 인용 번호는 숫자 근거에서 뺀다 — 그건 본문 사실이 아니다
+    numbers -= {str(n) for n in used}
+    in_context = {n.replace(",", "") for n in NUMBER.findall(context)}
+
+    return {
+        "인용표시율": float(bool(used)),
+        "인용정확도": (sum(n in available for n in used) / len(used)) if used else None,
+        "숫자근거율": (len(numbers & in_context) / len(numbers)) if numbers else None,
+        # **인용이 하나라도 있으면 물러선 게 아니다 (9/10 수정).**
+        # 전에는 답변 어디든 "명시되어 있지 않" 이 있으면 1을 줬다. 프롬프트가
+        # 표 서식을 요구하면서 행마다 근거를 다는데, 그중 한 행이 "이 항목은
+        # 문서에 없음" 이면 **답을 다 한 답변이 물러섬으로 잡혔다.** 배점 유형
+        # 물러섬 0.242 중 확인한 셋이 전부 오탐이었고, 그중 하나는 정답까지
+        # 정확히 맞췄다. 진짜 물러섬은 댈 근거가 없으니 인용도 없다.
+        "물러섬": float(bool(BACKED_OFF.search(answer)) and not used),
+        "정답포함": gold_in(answer, row.get("keywords")),
+    }
+
+
+def judge_all(rows, model):
+    """충실성을 LLM 으로 잰다. YES/NO/판정불가."""
+    from evaluation.generation import judge_faithfulness
+    from generation import AskableModel
+
+    llm = AskableModel(model)
+    verdicts = []
+    for i, row in enumerate(rows, 1):
+        verdicts.append(
+            judge_faithfulness(llm, row["question"], row["context"], row.get("answer") or "")
+        )
+        if i % 20 == 0 or i == len(rows):
+            print(f"    채점 {i}/{len(rows)}", flush=True)
+    return verdicts
+
+
+KEYS = ["인용표시율", "인용정확도", "숫자근거율", "물러섬", "정답포함"]
+
+
+def main():
+    parser = argparse.ArgumentParser(description="답변 채점")
+    parser.add_argument("files", nargs="+", help="answers_*.jsonl")
+    parser.add_argument("--judge", action="store_true", help="충실성까지 잰다 (LLM)")
+    parser.add_argument("--model", default="nano")
+    # 화면에 표를 찍는 것 말고 값도 남긴다. UI 가 이걸 읽는다 —
+    # 찍힌 표를 파싱하는 건 서식이 한 칸만 바뀌어도 깨진다.
+    parser.add_argument("--json", dest="json_out", help="지표를 JSON 으로 저장")
+    # **판정을 행별로 남긴다.** 집계만 하면 "왜 떨어졌나"를 못 판다. 9/10 에
+    # 충실성 0.963 → 0.862 를 놓고 "답이 길어져서"를 의심했는데, 확인하려면
+    # 길이와 판정을 같이 봐야 했고 그때는 판정이 버려진 뒤였다.
+    parser.add_argument("--rows", help="문항별 길이·판정을 jsonl 로 저장")
+    # 물러섬은 **점수가 아니라 비율이다.** 세트가 전부 answerable: true 면
+    # 물러선 문항은 전부 오답이다. 그런데 그중에는 질문 자체가 답할 수 없는
+    # 것이 섞여 있다 — 표에서 정규식으로 뽑다 보면 "C 업체가 왜 0점인가" 같은
+    # 가상의 문항이 만들어진다. 모델이 물러선 게 맞는데 오답으로 세는 것이다.
+    # 눈으로 보고 세트를 고칠지 모델을 고칠지 정해야 한다.
+    parser.add_argument("--misses", action="store_true",
+                        help="물러선 문항의 질문·정답·답변을 펼친다")
+    args = parser.parse_args()
+
+    table = {}
+    for path in args.files:
+        with open(path, encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        scored = [score(r) for r in rows]
+
+        by_type = defaultdict(lambda: defaultdict(list))
+        for row, s in zip(rows, scored):
+            for key in KEYS:
+                if s[key] is not None:
+                    by_type[row.get("type", "?")][key].append(s[key])
+                    by_type["전체"][key].append(s[key])
+
+        if args.judge:
+            print(f"  {Path(path).name} 충실성 채점 중…")
+            verdicts = judge_all(rows, args.model)
+            if args.rows:
+                out = Path(args.rows)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with out.open("w", encoding="utf-8") as f:
+                    for row, verdict in zip(rows, verdicts):
+                        f.write(json.dumps({
+                            "type": row.get("type"),
+                            "길이": len(row.get("answer") or ""),
+                            "충실성": None if verdict is None else float(verdict),
+                            "질문": (row.get("question") or "")[:60],
+                        }, ensure_ascii=False) + "\n")
+                print(f"문항별 판정 저장 → {out}")
+            for row, verdict in zip(rows, verdicts):
+                if verdict is not None:
+                    by_type[row.get("type", "?")]["충실성"].append(float(verdict))
+                    by_type["전체"]["충실성"].append(float(verdict))
+            judged = len(by_type["전체"].get("충실성", []))
+            if judged < len(rows):
+                print(f"  ⚠ 판정불가 {len(rows) - judged}개 — 빈 응답이면 토큰 예산을 의심한다")
+
+        # 전 구간(unscoped)으로 뽑은 발췌면 `found_doc` 이 붙어 있다.
+        # **틀린 답을 두 갈래로 나눈다** — 공고를 못 찾았나, 찾았는데 못 읽었나.
+        # 이걸 안 나누면 전 구간 숫자만 보고 어디를 고쳐야 할지 알 수 없다.
+        found = [r.get("found_doc") for r in rows if r.get("found_doc") is not None]
+        if found:
+            hit = sum(1 for f in found if f)
+            print(f"\n[{Path(path).stem}] 전 구간 · 정답 공고를 발췌에 담은 문항 "
+                  f"{hit}/{len(found)} ({hit / len(found):.0%})")
+            print("  나머지는 1단계에서 놓친 것이다. 생성이 아니라 검색을 고쳐야 한다.")
+
+        if args.misses:
+            backed = [(r, s) for r, s in zip(rows, scored) if s["물러섬"]]
+            print(f"\n[{Path(path).stem}] 물러선 문항 {len(backed)}/{len(rows)}개")
+            for row, _ in backed[:20]:
+                mark = "" if row.get("answerable", True) else "  (answerable:false — 맞는 답)"
+                print(f"\n  {row.get('qid')}{mark}")
+                print(f"    질문   {row.get('question', '')[:90]}")
+                keywords = row.get("keywords") or []
+                print(f"    정답   {str(keywords[0])[:90] if keywords else '(없음)'}")
+                print(f"    답변   {(row.get('answer') or '')[:90]}")
+
+        table[Path(path).stem] = by_type
+
+    keys = KEYS + (["충실성"] if args.judge else [])
+    types = ["배점", "요구사항", "의역", "전체"]
+    for kind in types:
+        if not any(kind in t for t in table.values()):
+            continue
+        print(f"\n[{kind}]")
+        print(f"  {'지표':<12}" + "".join(f"{name[:22]:>24}" for name in table))
+        for key in keys:
+            line = f"  {key:<12}"
+            for by_type in table.values():
+                values = by_type.get(kind, {}).get(key, [])
+                line += f"{(sum(values) / len(values)):>24.3f}" if values else f"{'-':>24}"
+            print(line)
+
+    if args.json_out:
+        out = {
+            name: {
+                kind: {
+                    key: sum(values) / len(values)
+                    for key, values in by_key.items()
+                    if values
+                }
+                for kind, by_key in by_type.items()
+            }
+            for name, by_type in table.items()
+        }
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json_out).write_text(
+            json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"지표 저장 → {args.json_out}")
+
+
+if __name__ == "__main__":
+    main()
