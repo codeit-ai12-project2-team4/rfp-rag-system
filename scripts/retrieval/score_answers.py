@@ -38,6 +38,37 @@ def cite_marks(text):
     return [int(n) for n in CITE.findall(text)]
 
 
+# 정답 문자열 앞에 붙은 글머리표·번호·라벨. 원문을 그대로 잘라 온 탓에 남는다.
+#     "마. 계약방법 : 협상에 의한 계약 (기술평가90%, 가격평가10%)"
+#                    ^^^^^^^^^^^^^^^ 모델은 여기부터 답한다
+GOLD_PREFIX = re.compile(r"^[\s\-•*○◦□ㅁ]*(?:[가-힣0-9]{1,2}[.)]\s*)?(?:[^:\n]{1,14}\s*:\s*)?")
+
+
+def gold_in(answer, keywords):
+    """정답이 답변에 들어 있나. **글자 그대로가 아니라 공백을 지우고 본다.**
+
+    전에는 `k in answer` 였다. 원문에서 잘라 온 정답에는 `마. 계약방법 : ` 같은
+    접두어가 붙어 있고, 모델은 서식을 바꿔 답한다. 그래서 정답을 맞혀도 0이
+    나왔다 — 배점 유형 정답포함 0.091 의 정체다.
+
+    **한계는 남는다.** 정답이 문장 하나를 통째로 잘라 온 경우(`○ 신규종합점수체계
+    적용 설계(안) 마련을 위한 정보 제공 수집 필요`)는 모델이 말을 바꾸면 어차피
+    못 잡는다. 그건 지표가 아니라 **평가 세트의 한계**다.
+    """
+    if not keywords:
+        return None
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    body = re.sub(r"\s+", "", answer)
+    for keyword in keywords:
+        if not keyword:
+            continue
+        gold = re.sub(r"\s+", "", GOLD_PREFIX.sub("", str(keyword)))
+        if gold and gold in body:
+            return 1.0
+    return 0.0
+
+
 def score(row):
     """한 문항의 공짜 지표. 값이 없으면 None — 평균에서 뺀다."""
     answer = row.get("answer") or ""
@@ -54,8 +85,14 @@ def score(row):
         "인용표시율": float(bool(used)),
         "인용정확도": (sum(n in available for n in used) / len(used)) if used else None,
         "숫자근거율": (len(numbers & in_context) / len(numbers)) if numbers else None,
-        "물러섬": float(bool(BACKED_OFF.search(answer))),
-        "정답포함": float(any(k and k in answer for k in (row.get("keywords") or []))),
+        # **인용이 하나라도 있으면 물러선 게 아니다 (9/10 수정).**
+        # 전에는 답변 어디든 "명시되어 있지 않" 이 있으면 1을 줬다. 프롬프트가
+        # 표 서식을 요구하면서 행마다 근거를 다는데, 그중 한 행이 "이 항목은
+        # 문서에 없음" 이면 **답을 다 한 답변이 물러섬으로 잡혔다.** 배점 유형
+        # 물러섬 0.242 중 확인한 셋이 전부 오탐이었고, 그중 하나는 정답까지
+        # 정확히 맞췄다. 진짜 물러섬은 댈 근거가 없으니 인용도 없다.
+        "물러섬": float(bool(BACKED_OFF.search(answer)) and not used),
+        "정답포함": gold_in(answer, row.get("keywords")),
     }
 
 
@@ -86,6 +123,10 @@ def main():
     # 화면에 표를 찍는 것 말고 값도 남긴다. UI 가 이걸 읽는다 —
     # 찍힌 표를 파싱하는 건 서식이 한 칸만 바뀌어도 깨진다.
     parser.add_argument("--json", dest="json_out", help="지표를 JSON 으로 저장")
+    # **판정을 행별로 남긴다.** 집계만 하면 "왜 떨어졌나"를 못 판다. 9/10 에
+    # 충실성 0.963 → 0.862 를 놓고 "답이 길어져서"를 의심했는데, 확인하려면
+    # 길이와 판정을 같이 봐야 했고 그때는 판정이 버려진 뒤였다.
+    parser.add_argument("--rows", help="문항별 길이·판정을 jsonl 로 저장")
     # 물러섬은 **점수가 아니라 비율이다.** 세트가 전부 answerable: true 면
     # 물러선 문항은 전부 오답이다. 그런데 그중에는 질문 자체가 답할 수 없는
     # 것이 섞여 있다 — 표에서 정규식으로 뽑다 보면 "C 업체가 왜 0점인가" 같은
@@ -110,7 +151,20 @@ def main():
 
         if args.judge:
             print(f"  {Path(path).name} 충실성 채점 중…")
-            for row, verdict in zip(rows, judge_all(rows, args.model)):
+            verdicts = judge_all(rows, args.model)
+            if args.rows:
+                out = Path(args.rows)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with out.open("w", encoding="utf-8") as f:
+                    for row, verdict in zip(rows, verdicts):
+                        f.write(json.dumps({
+                            "type": row.get("type"),
+                            "길이": len(row.get("answer") or ""),
+                            "충실성": None if verdict is None else float(verdict),
+                            "질문": (row.get("question") or "")[:60],
+                        }, ensure_ascii=False) + "\n")
+                print(f"문항별 판정 저장 → {out}")
+            for row, verdict in zip(rows, verdicts):
                 if verdict is not None:
                     by_type[row.get("type", "?")]["충실성"].append(float(verdict))
                     by_type["전체"]["충실성"].append(float(verdict))

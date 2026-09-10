@@ -25,6 +25,8 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
 
 import chunking  # noqa: E402
 
+from config import retrieval as cfg  # noqa: E402
+
 
 def rss_mb():
     """지금 프로세스가 쓰는 물리 메모리(MB). psutil 이 없으면 0."""
@@ -38,7 +40,10 @@ def rss_mb():
 
 def main():
     parser = argparse.ArgumentParser(description="BM25 의 시간·메모리를 단계별로 잰다.")
-    parser.add_argument("--chunks", required=True, help="청크 이름")
+    parser.add_argument(
+        "--chunks", default=cfg.CHUNKS,
+        help=f"청크 이름. 생략하면 config/retrieval.py 의 CHUNKS ({cfg.CHUNKS})"
+    )
     parser.add_argument("--add", type=int, default=300,
                         help="증분 흉내: 새로 들어온 청크 수 (기본 300 ≈ 하루치)")
     args = parser.parse_args()

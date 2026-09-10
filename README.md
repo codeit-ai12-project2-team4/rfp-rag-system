@@ -8,9 +8,14 @@
 
 Repo URL : [![Repo](https://img.shields.io/badge/GitHub-Repository-181717?style=flat&logo=github)](https://github.com/codeit-ai12-project2-team4/rfp-rag-system)
 
-팀 보고서 URL : `[노션 팀 보고서 링크]`
+Team Report URL : [<img src="https://upload.wikimedia.org/wikipedia/commons/e/e9/Notion-logo.svg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=original" width="20" height="20"> 바로가기](https://app.notion.com/p/AI12-4-3d503b5756c980d0a53cfb5f9e4d2174?source=copy_link)
 
-협업일지 : `[일지 PDF 링크]`
+**협업일지**
+
+- 권혁상 : [<img src="https://upload.wikimedia.org/wikipedia/commons/e/e9/Notion-logo.svg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=original" width="20" height="20"> 바로가기](https://app.notion.com/p/395a15136d7e809a8693deb2d9703464?source=copy_link)
+- 안찬형 : [<img src="https://upload.wikimedia.org/wikipedia/commons/e/e9/Notion-logo.svg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=original" width="20" height="20"> 바로가기](https://app.notion.com/p/3c603b5756c98049968bfa7150e5a898?source=copy_link)
+- 최민식 : [<img src="https://upload.wikimedia.org/wikipedia/commons/e/e9/Notion-logo.svg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=original" width="20" height="20"> 바로가기](https://app.notion.com/p/3c771fde206b80a0816fd56c39254c89?source=copy_link)
+- 최중열 : [<img src="https://upload.wikimedia.org/wikipedia/commons/e/e9/Notion-logo.svg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=original" width="20" height="20"> 바로가기](https://app.notion.com/p/3c3c4fa90261809a874bfc67011236fc)
 
 <br/>
 
@@ -81,6 +86,7 @@ RFP 문서의 복잡한 내용과 메타데이터를 효과적으로 추출하�
 
 ```
 📦 rfp-rag-system
+┣ 📂 .images
 ┣ 📂 config
 ┃ ┣ 📂 prompts
 ┃ ┣ 📝 __init__.py

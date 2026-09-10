@@ -123,11 +123,19 @@ def score(pairs, top_n, named=None, **kwargs):
 def main():
     """설정을 바꿔 가며 공고 검색을 재고 표로 찍는다."""
     parser = argparse.ArgumentParser(description="공고 검색(1단계)을 잰다.")
-    parser.add_argument("--chunks", required=True, help="청크 이름 (__header 없이)")
+    parser.add_argument(
+        "--chunks", default=cfg.CHUNKS,
+        help=f"청크 이름. 생략하면 config/retrieval.py 의 CHUNKS ({cfg.CHUNKS})"
+    )
     parser.add_argument(
         "--evalset", default=cfg.EVALSET, help=f"평가 세트 (기본: {cfg.EVALSET})"
     )
-    parser.add_argument("--pool", type=int, default=100, help="훑어볼 청크 수")
+    # 기본값을 **배포값**에 맞춘다. 100 은 어디서도 안 쓰는 값이라, 그냥 돌리면
+    # 서비스가 아닌 것을 재게 된다.
+    parser.add_argument(
+        "--pool", type=int, default=cfg.NOTICE_POOL,
+        help=f"훑어볼 **청크** 수. 생략하면 배포값 {cfg.NOTICE_POOL}",
+    )
     parser.add_argument("--top-n", type=int, default=10)
     parser.add_argument(
         "--embed", default="tei", choices=["tei", "local", "openai", "fake"]

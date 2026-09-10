@@ -39,6 +39,7 @@ from config import MODEL_CONFIGS, settings
 import evalrun
 from evaluation import load_evalset
 from generation import generate_answer, stream_answer
+import chunking
 import retriever
 from retriever import (
     build_context,
@@ -507,6 +508,11 @@ def health():
         "store": cfg.STORE,
         "index": cfg.index_name(),
         "chunks": cfg.chunk_name(),
+        # **개수까지 준다.** 이름은 같은데 코드가 옛것이면 이름만 봐서는 못
+        # 가린다. 9/9 에 차수 필터를 배포하고 재시작을 안 해서 옛 문서가 계속
+        # 검색됐는데, /health 는 정상으로 보였다. 개수가 그때 답을 줬을 값이다.
+        # `load_chunks` 는 lru_cache 라 이미 뜬 프로세스에서는 공짜다.
+        "청크수": len(chunking.load_chunks(cfg.chunk_name())),
         # **크론이 마지막으로 언제 어떻게 끝났나.** ssh 를 안 쓰는 사람이
         # "지금 새 공고가 들어오고 있나" 를 물을 유일한 창구다.
         "refresh": _refresh_stamp(),

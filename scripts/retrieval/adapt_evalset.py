@@ -1,8 +1,8 @@
-# ── 삭제 예정 (2026-09-09) ─────────────────────────────────────
-# 팀원 세트를 우리 형식으로 바꾸던 변환기. 세트가 eval_qa_both 로 확정됐고,
-# docstring 이 참조하는 sweep_pool.py 는 이미 없다.
-#
-# 되살릴 일이 생기면 이 주석을 지우고 근거를 적는다.
+# ── 되살림 (2026-09-10) ────────────────────────────────────────
+# 9/9 에 "세트가 eval_qa_both 로 확정됐다" 며 삭제 예정을 달았다. 9/10 에 팀원이
+# 새 세트(eval_set_160_v6)를 냈고 `doc_id` 가 **잘린 파일명**이라 청크와 연결이
+# 안 됐다 — `check_answers_exist` 가 정답 0/144 를 냈다. 글자가 사라진 게 아니라
+# 문서를 못 찾은 것이었다. 변환기가 다시 필요해졌다.
 
 """팀원이 만든 평가 세트를 우리 형식으로 바꾼다.
 
@@ -82,6 +82,32 @@ def load_corpus(docs_name):
     return by_name, body
 
 
+def resolve(name, by_name):
+    """파일명 → `공고번호-차수`. **잘린 이름도 받는다.**
+
+    새 세트의 `doc_id` 는 확장자 앞에서 끊긴 파일명이다.
+
+        재단법인 광주광역시 광주문화재단_2024년 광주문화예술통합플랫폼 시스.hwp
+                                                              ^^^^^^ 여기서 끊겼다
+
+    완전 일치 → 확장자 뗀 이름 → **접두어** 순으로 본다. 접두어가 여러 문서에
+    걸리면 **고르지 않는다** — 엉뚱한 공고에 정답을 붙이면 그 문항은 조용히
+    틀린 채로 평가에 들어간다. 못 찾은 것보다 나쁘다.
+
+    Returns:
+        (doc_id 또는 None, 사유) — 사유는 `완전일치`·`접두어`·`모호`·`없음`.
+    """
+    if name in by_name:
+        return by_name[name], "완전일치"
+    stem = Path(name).stem
+    if stem in by_name:
+        return by_name[stem], "완전일치"
+    hits = {doc_id for key, doc_id in by_name.items() if key.startswith(stem)}
+    if len(hits) == 1:
+        return hits.pop(), "접두어"
+    return None, ("모호" if hits else "없음")
+
+
 def _overlap(span, answer):
     """조각이 답을 담고 있는 정도. 답을 8자씩 잘라 몇 조각이나 들어 있는지 본다."""
     if not answer:
@@ -145,19 +171,31 @@ def main():
     by_name, body = load_corpus(args.docs)
     rows = [json.loads(line) for line in open(src, encoding="utf-8") if line.strip()]
 
-    pairs, weak, unmapped = [], [], 0
-    kept = Counter()
+    pairs, weak = [], []
+    kept, why = Counter(), Counter()
+    # **입력이 두 모양이다.** 팀원 초기 세트는 `evidence_text` 에서 정답을 뽑아야
+    # 했지만, 새 세트는 `keywords`·`type` 이 이미 우리 이름으로 들어 있다.
+    # 그때는 doc_id 만 갈아 끼우면 되므로 정답 추출 기계를 태우지 않는다 —
+    # 태우면 멀쩡한 정답을 다시 뽑아 더 나쁜 조각으로 바꾼다.
+    ready = bool(rows) and "keywords" in rows[0] and "type" in rows[0]
+    if ready:
+        print("입력에 keywords·type 이 있다 → doc_id 만 바꾼다 (정답은 그대로)")
+
     for row in rows:
         name = row["doc_id"]
-        doc_id = by_name.get(name) or by_name.get(Path(name).stem)
+        doc_id, reason = resolve(name, by_name)
+        why[reason] += 1
+
+        if ready:
+            pairs.append({**row, "doc_id": doc_id})
+            continue
+
         kind = row.get("eval_category") or "기타"
         answerable = row.get("question_type") != "unanswerable" and kind != "없음"
 
         span, size = "", 0
         if answerable:
-            if doc_id is None:
-                unmapped += 1
-            else:
+            if doc_id is not None:
                 span, size = best_span(
                     row.get("evidence_text") or "",
                     body[doc_id],
@@ -184,8 +222,24 @@ def main():
 
     print(f"{len(pairs)}문항 → {out}")
     print(f"유형: {dict(Counter(p['type'] for p in pairs))}")
-    if unmapped:
-        print(f"⚠ doc_id 를 못 찾은 문항 {unmapped}개")
+
+    print(f"\ndoc_id 매핑 ({args.docs} 기준)")
+    for reason in ("완전일치", "접두어", "모호", "없음"):
+        if why[reason]:
+            print(f"  {reason:<6} {why[reason]:>4}문항")
+    if why["모호"] or why["없음"]:
+        print("  ⚠ 못 붙인 문항은 doc_id 가 null 이라 --scoped 에서 빠진다.")
+        print("    **엉뚱한 공고에 붙이느니 비운다** — 조용히 틀리는 게 더 나쁘다.")
+        bad = [r["doc_id"] for r, p in zip(rows, pairs) if p.get("doc_id") is None]
+        for name in list(dict.fromkeys(bad))[:5]:
+            print(f"      {name}")
+
+    if ready:
+        print("\n정답은 입력 그대로 뒀다. 청크에 실제로 있는지는")
+        print("compare_retrieval 이 시작할 때 찍는 `정답이 청크에 없는 질문` 으로 본다.")
+        print(f"\n다음:  python scripts/retrieval/compare_retrieval.py --chunks <청크> "
+              f"--evalset {args.out or args.src} --scoped")
+        return
 
     print(f"\n정답 조각을 {args.min_span}자 이상 건진 비율 ({args.docs} 기준)")
     for kind in sorted({k for k, _ in kept}):

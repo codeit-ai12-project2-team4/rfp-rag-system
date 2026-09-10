@@ -30,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -43,6 +44,7 @@ for _folder in (_ROOT / "src", _ROOT):
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from config import retrieval as _cfg
 from config import settings
 
 # RFP 목차 헤딩 패턴. 위에 있는 것부터 검사한다.
@@ -491,6 +493,95 @@ def save_chunks(chunks, name):
     return path
 
 
+def split_doc_id(doc_id):
+    """`R26BK01719775-1` → `("R26BK01719775", 1)`. 규칙 밖이면 `(doc_id, None)`.
+
+    `doc_id` 는 `공고번호-차수` 다(`crawl.doc_id`·`preprocessing.run.make_doc_id`).
+    차수는 메타데이터에 안 남으므로 여기서 doc_id 를 쪼개 얻는다 — 그래야
+    **재색인 없이** 차수를 쓸 수 있다.
+
+    Args:
+        doc_id: 청크 메타의 doc_id.
+
+    Returns:
+        (공고번호, 차수). 차수를 못 읽으면 (원래 문자열, None).
+    """
+    no, _, order = str(doc_id).rpartition("-")
+    if not no or not order.isdigit():
+        return str(doc_id), None
+    return no, int(order)
+
+
+def _body_digest(chunks):
+    """청크 묶음의 본문 해시. 순서까지 같아야 같은 값이 나온다."""
+    h = hashlib.sha1()
+    for c in chunks:
+        h.update(c.page_content.encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def drop_stale_revisions(chunks, verbose=False):
+    """같은 공고의 옛 차수 중 **본문이 한 글자도 안 다른 것**을 뺀다.
+
+    나라장터는 마감일만 미루면서 차수를 올린다. 그때 `doc_id` 가
+    `공고번호-차수` 라 **새 문서로 쌓인다** — 크롤러의 중복 방지는 doc_id 로
+    보므로 안 걸린다. 9/9 실측: 공고 320건 중 차수가 여럿인 것 10건,
+    그중 **9건은 본문 유사도 1.000** 이었다.
+
+    그대로 두면 세 군데가 상한다.
+
+        검색   같은 내용이 두 벌이라 임베딩도 같고 순위가 나란히 붙는다.
+               pool 30 을 요청하면 15자리가 중복으로 채워진다(실측 6:6·15:15·11:11).
+        목록   같은 사업이 두 줄로 뜨고, 어느 게 최신인지 화면에 표시가 없다.
+        답변   옛 차수를 고르면 모델이 그게 낡은 줄 모른 채 확신 있게 답한다.
+
+    **본문이 다르면 안 뺀다.** 그건 "1차와 뭐가 달라졌나" 를 답할 재료다.
+    실측 10건 중 1건(`R26BK01719775`, 44,522 → 42,757자)이 그랬다. 지우면
+    그 질문이 구조적으로 답할 수 없는 질문이 된다.
+
+    Args:
+        chunks: 청크 리스트.
+        verbose: 무엇을 뺐는지 찍을지.
+
+    **여기서 빼도 벡터 테이블에는 남아 있다.** 청크 파일이 진실이고 테이블은
+    사본이라, 맞추는 건 `lance_store.sync_docs` 다(청크에 없는 문서를 지운다).
+    BM25 와 목록은 이 함수를 지나므로 바로 듣지만 Dense 는 안 듣는다.
+    필터를 바꿨으면 `python src/lance_store.py --sync` 를 한 번 돌린다.
+
+    Returns:
+        옛 중복 차수를 뺀 리스트. 뺄 게 없으면 받은 것을 그대로 돌려준다.
+    """
+    by_notice = {}
+    for chunk in chunks:
+        no, order = split_doc_id(chunk.metadata.get("doc_id") or "")
+        if order is None:
+            continue  # 규칙 밖 이름은 안 건드린다
+        by_notice.setdefault(no, {}).setdefault(order, []).append(chunk)
+
+    drop = set()
+    for no, by_order in by_notice.items():
+        if len(by_order) < 2:
+            continue
+        orders = sorted(by_order)
+        newest = _body_digest(by_order[orders[-1]])
+        for order in orders[:-1]:
+            if _body_digest(by_order[order]) == newest:
+                drop.add(f"{no}-{order}")
+                if verbose:
+                    print(f"  옛 차수 제외 {no}-{order} (본문이 -{orders[-1]} 과 같음)")
+            elif verbose:
+                print(f"  옛 차수 유지 {no}-{order} (본문이 다르다 — 비교용)")
+    if not drop:
+        return chunks
+    if verbose:
+        print(f"  {len(drop)}개 공고차수를 뺐다")
+    return [
+        c for c in chunks
+        if str(c.metadata.get("doc_id") or "") not in drop
+    ]
+
+
 @lru_cache(maxsize=2)
 def load_chunks(name):
     """저장해 둔 청크를 읽는다. **한 번 읽고 돌려쓴다.**
@@ -516,10 +607,20 @@ def load_chunks(name):
     """
     path = settings.CHUNKS / f"{name}.jsonl"
     with open(path, encoding="utf-8") as f:
-        return [
+        rows = [
             _row_to_document(row)
             for row in (json.loads(line) for line in f if line.strip())
         ]
+    # **여기서 한 번만 거른다.** 검색·목록·평가가 전부 이 함수를 지나므로,
+    # 여기 걸면 서비스와 측정이 같은 코퍼스를 본다. 부르는 쪽마다 걸면
+    # 이번 프로젝트에서 네 번 난 그 어긋남(설정이 갈라지는 것)이 또 난다.
+    rows = drop_stale_revisions(rows)
+    # 사람이 확인해 적어 둔 것도 뺀다. **규칙을 섞지 않는다** —
+    # 위는 본문 비교, 이건 목록. 섞으면 왜 빠졌는지 못 가린다.
+    return [
+        c for c in rows
+        if str(c.metadata.get("doc_id") or "") not in _cfg.REPLACED_DOCS
+    ]
 
 
 def _row_to_document(row):

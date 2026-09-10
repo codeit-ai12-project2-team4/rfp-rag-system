@@ -254,7 +254,10 @@ def check_answers_exist(pairs, chunks):
 def main():
     """검색 방법을 비교해 outputs/eval_results/retrieval.csv 를 만든다."""
     parser = argparse.ArgumentParser(description="검색 방법 비교")
-    parser.add_argument("--chunks", required=True, help="outputs/chunks 의 청크 이름")
+    parser.add_argument(
+        "--chunks", default=cfg.CHUNKS,
+        help=f"청크 이름. 생략하면 config/retrieval.py 의 CHUNKS ({cfg.CHUNKS})"
+    )
     parser.add_argument(
         "--evalset",
         default=cfg.EVALSET,

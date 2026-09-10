@@ -242,7 +242,7 @@ def main():
     # 안 주면 서버가 쓰는 것과 **같은 청크**를 쓴다. `.env` 의 CHUNKS 다.
     # 이름을 손으로 적으면 서버는 v8 을 보는데 실험은 v7 을 보는 일이 생긴다.
     parser.add_argument(
-        "--chunks", default=cfg.CHUNKS, help=f"청크 이름 (기본: .env 의 {cfg.CHUNKS})"
+        "--chunks", default=cfg.CHUNKS, help=f"청크 이름. 생략하면 config/retrieval.py 의 CHUNKS ({cfg.CHUNKS})"
     )
     parser.add_argument("--top", type=int, default=5, help="키마다 남길 낱말 수")
     parser.add_argument("--min-docs", type=int, default=20, help="후보의 최소 등장 청크 수")

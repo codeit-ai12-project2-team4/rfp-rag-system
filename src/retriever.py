@@ -108,7 +108,7 @@ from config import retrieval as cfg
 from config import settings
 from evaluation import body, fit_budget
 from models import load_embedder, load_reranker
-from pieces import BM25, Dense, Hybrid, Pipeline, Rerank, State
+from pieces import AddKeywords, BM25, Dense, Hybrid, Pipeline, Rerank, State
 from vectorstore import load_store
 
 # 실측으로 고른 기본값. 바꾸려면 scripts/compare_retrieval.py 로 다시 재고 바꾼다.
@@ -341,10 +341,16 @@ def format_context(chunks, generation=False):
         close = value("bid_close_at")[:10]
         amount = value("budget")
         kind = value("budget_kind") or "공고 금액"
+        # **차수를 넣는다.** 같은 공고의 다른 차수가 같이 들어오면(본문이
+        # 달라 남겨 둔 경우) `notice_no` 까지가 글자 하나까지 같아서, 모델이
+        # 서로 모순되는 두 블록을 같은 라벨로 받고 아무거나 고른다.
+        # 차수는 메타에 없다 — doc_id 를 쪼갠다. 재색인이 필요 없다.
+        _, order = chunking.split_doc_id(meta.get("doc_id") or "")
         parts = [
             value("title"),
             value("agency"),
             value("notice_no"),
+            f"{order}차 공고" if order is not None else "",
             f"마감 {close}" if close else "",
             f"{kind} {money(amount)}" if amount else "",
         ]
@@ -535,6 +541,10 @@ def search_notices(
             row = found[doc_id] = _drop_nan(
                 {
                     "doc_id": doc_id,
+                    # 목록에서 "3차" 배지를 달 수 있게. 본문이 같은 옛 차수는
+                    # `chunking.drop_stale_revisions` 가 이미 뺐으므로, 여기
+                    # 두 줄로 보이는 건 **본문이 실제로 다른** 경우뿐이다.
+                    "차수": chunking.split_doc_id(doc_id)[1],
                     "title": _plain(meta.get("title")),
                     "agency": _plain(meta.get("agency")),
                     "budget": _plain(meta.get("budget")),
@@ -553,10 +563,33 @@ def search_notices(
         for r in found.values()
         if _passes(r, min_budget, max_budget, agency, closes_after)
     ]
-    rows.sort(key=lambda r: r["score"], reverse=True)
+    # **형제 차수를 여기서도 채운다.** 화면은 목록 행을 sessionStorage 에 담아
+    # 상세로 넘긴다. 여기 없으면 상세가 질문할 때 자기 doc_id 하나만 넘기고,
+    # 본문이 다른 옛 차수는 후보에 아예 안 든다 — "뭐가 바뀌었나" 를 못 답한다.
+    everything = _notices(chunks)
     for row in rows:
+        kin = (everything.get(row["doc_id"]) or {}).get("siblings")
+        if kin:
+            row["siblings"] = kin
+    rows.sort(key=lambda r: r["score"], reverse=True)
+
+    # **한 공고는 한 장.** 본문이 다른 차수는 색인에 둘 다 남는다(비교 재료다).
+    # 그런데 목록까지 두 줄이면 제목·기관·예산·마감이 다 같은 카드가 나란히
+    # 떠서 중복으로 보인다. 색인은 그대로 두고 **화면에서만** 접는다 —
+    # 상세는 `siblings` 로 여전히 두 차수를 다 넘긴다.
+    #
+    # 대표는 **점수가 제일 높은 차수**다. 최신을 강제하지 않는다: 질문에 맞는
+    # 대목이 옛 차수에 있으면 카드가 `0차 (옛)` 로 뜨는 게 맞다. 그게 "그 내용은
+    # 옛 차수에 있다" 는 정보다.
+    picked, seen = [], set()
+    for row in rows:  # 이미 점수 내림차순이라 먼저 만난 것이 대표다
+        no, order = chunking.split_doc_id(row["doc_id"])
+        if order is not None and no in seen:
+            continue
+        seen.add(no)
         row["score"] = round(row["score"], 6)
-    return rows[:top_n]
+        picked.append(row)
+    return picked[:top_n]
 
 
 @lru_cache(maxsize=1)
@@ -684,6 +717,7 @@ def _notices(chunks=None):
         meta = chunk.metadata
         found[doc_id] = _drop_nan({
             "doc_id": doc_id,
+            "차수": chunking.split_doc_id(doc_id)[1],
             "title": _plain(meta.get("title")),
             "agency": _plain(meta.get("agency")),
             "budget": _plain(meta.get("budget")),
@@ -702,6 +736,29 @@ def _notices(chunks=None):
         row = found.get(str(chunk.metadata.get("doc_id") or ""))
         if row is not None:
             row["청크수"] += 1
+
+    # **형제 차수를 서버가 알려준다.** 본문이 다른 차수는 코퍼스에 둘 다 남으므로
+    # (`chunking.drop_stale_revisions`), 화면이 "이 공고는 1차도 있다" 를 띄우고
+    # 질문할 때 두 차수를 같이 넘길 수 있어야 한다. 목록에서 넘겨준 값에 기대면
+    # 주소 직접 입력·출처 클릭으로 들어왔을 때 빈다 — `notice_one` 이 있는 이유와
+    # 같은 이유다.
+    family = {}
+    for doc_id in found:
+        no, order = chunking.split_doc_id(doc_id)
+        if order is not None:
+            family.setdefault(no, []).append((order, doc_id))
+    for members in family.values():
+        ids = [doc_id for _, doc_id in sorted(members)]
+        for _, doc_id in members:
+            found[doc_id]["siblings"] = ids
+
+    # **뺀 사실을 화면에 알린다.** 컨설턴트가 옛 문서를 이미 받아 갔을 수 있다.
+    # 조용히 사라지면 "어제 본 그 내용이 왜 없지" 가 된다. 문구는 사람이
+    # `config/retrieval.py: REPLACED_DOCS` 에 적어 둔 그대로 준다.
+    for gone, why in cfg.REPLACED_DOCS.items():
+        no, _ = chunking.split_doc_id(gone)
+        for _, doc_id in family.get(no, []):
+            found[doc_id].setdefault("교체안내", []).append(why)
     return found
 
 
@@ -724,6 +781,9 @@ def sources(chunks):
             {
                 "n": i,
                 "doc_id": chunk.metadata.get("doc_id"),
+                # 화면이 "3차 공고" 배지를 달 수 있게. 프롬프트 머리와 같은 값이라
+                # 답변과 출처가 어긋나지 않는다.
+                "차수": chunking.split_doc_id(chunk.metadata.get("doc_id") or "")[1],
                 "title": chunk.metadata.get("title"),
                 "agency": chunk.metadata.get("agency"),
                 "chunk_id": chunk.metadata.get("chunk_id"),

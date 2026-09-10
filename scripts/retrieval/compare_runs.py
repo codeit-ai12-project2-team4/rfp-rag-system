@@ -105,7 +105,7 @@ def main():
         sys.exit("두 성적표에 공통인 설정이 없습니다")
 
     name_a, name_b = label(args.a), label(args.b)
-    print(f"\n{name_a} / {name_b}   (굵은 쪽이 이긴 칸)\n")
+    print(f"\n{name_a} / {name_b}   (부등호가 이긴 쪽을 가리킨다)\n")
     header = "설정".ljust(28) + "".join(k.center(20) for k in kinds)
     print(header)
 
@@ -131,11 +131,22 @@ def main():
         avg_b = (right.loc[setup, kinds] * weights).sum() / weights.sum()
         print(f"  {setup:<28} {avg_a:.3f} / {avg_b:.3f}   {avg_b - avg_a:+.3f}")
 
+    # **동률은 분모에서 뺀다.** BM25 행은 두 실행에서 구조상 같고(같은 청크·같은
+    # BM25), 임베더만 바꾸면 리랭크 행도 같다. 18칸 중 13칸이 동률로 고정이라
+    # 동률을 분모에 넣으면 80% 문턱을 원리적으로 못 넘는다 — 승부 난 칸을 5:0 으로
+    # 다 이겨도 "차이 없음" 이 찍혔다 (9/8).
+    #
+    # 그리고 이 도구는 "차이가 없다" 고 **단정하지 않는다.** 방향만 말하고
+    # 크기 판단은 위의 가중평균으로 넘긴다.
+    decided = wins[name_a] + wins[name_b]
     lopsided = max(wins[name_a], wins[name_b])
-    if lopsided >= total * 0.8:
-        print("\n한쪽으로 쏠렸습니다. 칸마다 차이가 노이즈여도 방향이 일정하면 신호입니다.")
+    if decided == 0:
+        print("\n모든 칸이 동률입니다. 같은 실행이거나, 바꾼 것이 이 구간에 안 닿습니다.")
+    elif lopsided >= decided * 0.8:
+        winner = name_a if wins[name_a] > wins[name_b] else name_b
+        print(f"\n승부 난 {decided}칸 중 {lopsided}칸이 {winner} 쪽입니다. 방향이 일정하면 신호입니다.")
     else:
-        print("\n부호가 갈립니다. 두 실행에 실질 차이가 없다고 봅니다.")
+        print(f"\n승부 난 {decided}칸이 갈립니다 ({wins[name_a]}:{wins[name_b]}). 가중평균으로 판단하세요.")
 
 
 if __name__ == "__main__":
